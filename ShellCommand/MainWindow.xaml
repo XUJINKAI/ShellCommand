@@ -1,0 +1,60 @@
+﻿<Window x:Class="ShellCommand.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:ShellCommand"
+        xmlns:wpf="clr-namespace:XJK.WPF;assembly=XJK.WPF"
+        mc:Ignorable="d"
+        WindowStyle="ToolWindow" Topmost="True" ResizeMode="NoResize"
+        Title="ShellCommand" Height="450" Width="600">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="80"></RowDefinition>
+            <RowDefinition></RowDefinition>
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition></ColumnDefinition>
+        </Grid.ColumnDefinitions>
+
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="20"></RowDefinition>
+                <RowDefinition></RowDefinition>
+                <RowDefinition Height="20"></RowDefinition>
+            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="40"></ColumnDefinition>
+                <ColumnDefinition></ColumnDefinition>
+                <ColumnDefinition Width="40"></ColumnDefinition>
+                <ColumnDefinition></ColumnDefinition>
+                <ColumnDefinition Width="40"></ColumnDefinition>
+            </Grid.ColumnDefinitions>
+            
+            <Grid.Resources>
+
+            </Grid.Resources>
+            
+            <Button Click="Install" Grid.Column="1" Grid.Row="1">Install</Button>
+            <Button Click="Uninstall" Grid.Column="3" Grid.Row="1">Uninstall</Button>
+        </Grid>
+
+        <Grid Grid.Row="1" Margin="20">
+            <StackPanel>
+                <wpf:Link Content="Open App Setting Folder" Click="OpenAppSettingFolder"></wpf:Link>
+                <wpf:Link Content="Edit Global Setting File" Click="EditGlobalSettingFile"></wpf:Link>
+                <Label></Label>
+                <wpf:AutoLinkTextBlock xml:space="preserve">
+Install: Easy Press Install Button. 
+Use: Right click on folder background, you will see an extend menu.
+Edit .shellcommand.yaml file to customize menu items.
+                    
+Uninstall: Press Uninstall, then restart explorer.exe via [Task Manager](taskmgr).
+                    
+This App is Under MIT license, and Open Source on Github: [XUJINKAI/ShellCommand](https://github.com/XUJINKAI/ShellCommand)
+Star or PR if you like it ❤
+                </wpf:AutoLinkTextBlock>
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>

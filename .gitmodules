@@ -1,0 +1,3 @@
+[submodule "XJKdotNetLibrary"]
+	path = XJKdotNetLibrary
+	url = https://github.com/XUJINKAI/XJKdotNetLibrary.git
