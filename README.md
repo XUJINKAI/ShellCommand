@@ -13,12 +13,10 @@ Customize your context menu by Single file.
 
 Open ShellCommand.exe, Click Install, Bingo!
 
-<img src="docs/app.png" style="height: 50%">
-
 ## Known Issues
 
 - After Uninstall, explorer.exe keep loading program. You should restart explorer to release or the file cannot be deleted.
 
 ## LICENSE
 
-MIT. by XUJINKAI.❤
+MIT License.
