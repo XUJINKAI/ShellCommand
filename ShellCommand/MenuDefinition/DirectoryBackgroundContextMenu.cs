@@ -39,7 +39,7 @@ namespace ShellCommand.MenuDefinition
                 container.DropDownItems.Add(new ToolStripSeparator());
             }
 
-            var globalSettingPath = Path.Combine(Util.Reg.GetAppFolderPath(), Env.GlobalSettingFileName);
+            var globalSettingPath = Path.Combine(Env.GetAppFolder(), Env.GlobalSettingFileName);
             if (File.Exists(globalSettingPath))
             {
                 var globalItems = CommandFileParser.ParseGlobalCommand(globalSettingPath, FolderPath);
@@ -54,6 +54,8 @@ namespace ShellCommand.MenuDefinition
             {
                 container.DropDownItems.Add(BuildinMenuItems.InitDirectoryFile(CommandFilePath));
             }
+
+            container.DropDownItems.Add(BuildinMenuItems.OpenGlobalSetting());
             container.DropDownItems.Add(BuildinMenuItems.OpenApp());
 
             menu.Items.Add(container);

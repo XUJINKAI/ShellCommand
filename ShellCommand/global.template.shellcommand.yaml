@@ -1,0 +1,20 @@
+# ShellCommand: https://github.com/XUJINKAI/ShellCommand 
+
+GlobalCommands:
+- Name: Open SourceTree Here
+  Command: cmd /c start %LocalAppData%\SourceTree\SourceTree.exe -f "%DIR%"
+  Match: .git
+
+- Command: git pull
+  Match: .git
+- Command: git submodule update --init --recursive
+  Match: .gitmodules
+
+- Name: Open Command Window Here
+  Command: cmd
+- Name: Open Command Window Here (Administrator)
+  Command: cmd /K "cd /d ""%DIR%"""
+  RunAsAdmin: true
+
+Functions:
+  CopyPath: true

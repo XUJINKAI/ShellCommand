@@ -77,11 +77,12 @@ namespace ShellCommand
 
         private void AdminInstall()
         {
-            var configpath = System.IO.Path.Combine(XJK.ENV.BaseDirectory, Env.GlobalSettingFileName);
-            if (!File.Exists(configpath))
+            var globalfile = System.IO.Path.Combine(XJK.ENV.BaseDirectory, Env.GlobalSettingFileName);
+            if (!File.Exists(globalfile))
             {
-                var setting = DataModel.DefaultSetting.GetGlobal();
-                Util.Yaml.SaveYaml(configpath, setting);
+                var templatefile = System.IO.Path.Combine(XJK.ENV.BaseDirectory, Env.GlobalTemplateSettingFileName);
+                if (File.Exists(templatefile))
+                    File.Copy(templatefile, globalfile);
             }
             Util.Reg.SetExePath(XJK.ENV.EntryLocation);
             Util.Reg.SetLogPath();

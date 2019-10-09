@@ -34,6 +34,17 @@ namespace ShellCommand.MenuDefinition
             return item;
         }
 
+        public static ToolStripMenuItem OpenGlobalSetting()
+        {
+            var item = new ToolStripMenuItem(Env.OpenGlobalSettingFileText);
+            item.Click += (sender, args) =>
+            {
+                var path = Path.Combine(Env.GetAppFolder(), Env.GlobalSettingFileName);
+                Cmd.RunAsInvoker(path, "");
+            };
+            return item;
+        }
+
         public static ToolStripMenuItem OpenApp()
         {
             var path = Util.Reg.GetExePath();

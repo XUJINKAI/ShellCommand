@@ -42,10 +42,5 @@ namespace ShellCommand.Util
                 return key.GetValue(ExePath) as string;
             }
         }
-
-        public static string GetAppFolderPath()
-        {
-            return Path.GetDirectoryName(GetExePath());
-        }
     }
 }

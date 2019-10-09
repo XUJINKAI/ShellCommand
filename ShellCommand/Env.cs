@@ -11,12 +11,15 @@ namespace ShellCommand
         public const string AppName = "ShellCommand";
         public const string CommandFileName = ".shellcommand.yaml";
         public const string GlobalSettingFileName= "global.shellcommand.yaml";
+        public const string GlobalTemplateSettingFileName = "global.template.shellcommand.yaml";
 
         public const string CreateFolderSpecificFileText = "Create .shellcommand.yaml";
+        public const string OpenGlobalSettingFileText = "Edit Global Setting";
         public const string OpenAppText = "Setting";
 
         public const string ConfigTitle = "# ShellCommand: https://github.com/XUJINKAI/ShellCommand \r\n\r\n";
 
+        public const string VAR_DIR = "%DIR%";
 
         public static string GetAppFolder()
         {

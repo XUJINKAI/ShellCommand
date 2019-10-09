@@ -18,7 +18,8 @@ namespace ShellCommand.DataModel
 
         public void Execute(string workingDir)
         {
-            var (com, arg) = Cmd.SplitCommandArg(Command);
+            var repcommand = Command.Replace(Env.VAR_DIR, workingDir.Replace("\\", "/"));
+            var (com, arg) = Cmd.SplitCommandArg(repcommand);
             ProcessInfoChain ProcessInfoChain = ProcessInfoChain.New(com, arg);
             if (RunAsAdmin)
             {
