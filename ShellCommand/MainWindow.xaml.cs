@@ -1,4 +1,5 @@
-﻿using System;
+﻿using ShellCommand.DataModel;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -61,6 +62,17 @@ namespace ShellCommand
             {
                 Cmd.RunAsAdmin(XJK.ENV.EntryLocation, ARG_INSTALL);
             }
+
+            var globalfile = System.IO.Path.Combine(XJK.ENV.BaseDirectory, Env.GlobalSettingFileName);
+            if (!File.Exists(globalfile))
+            {
+                var templatefile = System.IO.Path.Combine(XJK.ENV.BaseDirectory, Env.GlobalTemplateSettingFileName);
+                if (File.Exists(templatefile))
+                {
+                    var templateObj = Util.Yaml.LoadYaml<GlobalConfig>(templatefile);
+                    Util.Yaml.SaveYaml(globalfile, templateObj);
+                }
+            }
         }
 
         private void Uninstall(object sender, RoutedEventArgs e)
@@ -77,13 +89,6 @@ namespace ShellCommand
 
         private void AdminInstall()
         {
-            var globalfile = System.IO.Path.Combine(XJK.ENV.BaseDirectory, Env.GlobalSettingFileName);
-            if (!File.Exists(globalfile))
-            {
-                var templatefile = System.IO.Path.Combine(XJK.ENV.BaseDirectory, Env.GlobalTemplateSettingFileName);
-                if (File.Exists(templatefile))
-                    File.Copy(templatefile, globalfile);
-            }
             Util.Reg.SetExePath(XJK.ENV.EntryLocation);
             Util.Reg.SetLogPath();
             Cmd.RunAsInvoker(Env.GetSrmPath(), "install ShellCommand.exe -codebase");

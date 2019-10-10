@@ -17,5 +17,6 @@ namespace ShellCommand.DataModel
     public class BuildinFunctions
     {
         public bool CopyPath { get; set; }
+        public bool EditGlobal { get; set; }
     }
 }

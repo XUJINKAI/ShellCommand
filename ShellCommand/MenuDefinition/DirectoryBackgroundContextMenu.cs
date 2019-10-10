@@ -30,34 +30,27 @@ namespace ShellCommand.MenuDefinition
         protected override ContextMenuStrip CreateMenu()
         {
             var menu = new ContextMenuStrip();
-            var container = new ToolStripMenuItem(Env.AppName);
+            var container = new ToolStripMenuItem(Env.MenuDisplay);
 
-            var fileItems = CommandFileParser.ParseDirectoryCommand(CommandFilePath, FolderPath);
-            if (fileItems.Count > 0)
-            {
-                container.DropDownItems.AddRange(fileItems.ToArray());
-                container.DropDownItems.Add(new ToolStripSeparator());
-            }
+            var list = new List<ToolStripItem>();
+
+            MenuItemsBuilder.ParseDirectoryCommandInto(list, CommandFilePath, FolderPath);
+            MenuItemsBuilder.AddSeparator(list);
 
             var globalSettingPath = Path.Combine(Env.GetAppFolder(), Env.GlobalSettingFileName);
             if (File.Exists(globalSettingPath))
             {
-                var globalItems = CommandFileParser.ParseGlobalCommand(globalSettingPath, FolderPath);
-                if (globalItems.Count > 0)
-                {
-                    container.DropDownItems.AddRange(globalItems.ToArray());
-                    container.DropDownItems.Add(new ToolStripSeparator());
-                }
+                MenuItemsBuilder.ParseGlobalCommandInto(list, globalSettingPath, FolderPath);
             }
 
+            list.Add(BuildinMenuItems.OpenApp());
             if (!File.Exists(CommandFilePath))
             {
-                container.DropDownItems.Add(BuildinMenuItems.InitDirectoryFile(CommandFilePath));
+                MenuItemsBuilder.AddSeparator(list);
+                list.Add(BuildinMenuItems.InitDirectoryFile(CommandFilePath));
             }
 
-            container.DropDownItems.Add(BuildinMenuItems.OpenGlobalSetting());
-            container.DropDownItems.Add(BuildinMenuItems.OpenApp());
-
+            container.DropDownItems.AddRange(list.ToArray());
             menu.Items.Add(container);
             return menu;
         }

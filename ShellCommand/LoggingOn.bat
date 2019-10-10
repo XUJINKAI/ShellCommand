@@ -1,0 +1,1 @@
+ServerRegistrationManager.exe config LoggingMode 6

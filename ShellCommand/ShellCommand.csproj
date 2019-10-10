@@ -121,7 +121,7 @@
     <Compile Include="DataModel\DefaultSetting.cs" />
     <Compile Include="DataModel\GlobalConfig.cs" />
     <Compile Include="MenuDefinition\BuildinMenuItems.cs" />
-    <Compile Include="MenuDefinition\CommandFileParser.cs" />
+    <Compile Include="MenuDefinition\MenuItemsBuilder.cs" />
     <Compile Include="Util\Reg.cs" />
     <Compile Include="Util\Yaml.cs" />
     <Page Include="MainWindow.xaml">
@@ -175,10 +175,16 @@
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>
-    <None Include=".shellcommand.yaml">
+    <None Include="global.template.shellcommand.yaml">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
-    <None Include="global.template.shellcommand.yaml">
+    <None Include="LoggingOff.bat">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Include="LoggingOn.bat">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Include="RestartExplorer.bat">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
   </ItemGroup>

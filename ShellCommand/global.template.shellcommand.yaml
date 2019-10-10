@@ -10,11 +10,19 @@ GlobalCommands:
 - Command: git submodule update --init --recursive
   Match: .gitmodules
 
-- Name: Open Command Window Here
+- Name: ---
+
+- Name: "Open Command Window Here(&C)"
   Command: cmd
 - Name: Open Command Window Here (Administrator)
   Command: cmd /K "cd /d ""%DIR%"""
   RunAsAdmin: true
 
+- Name: ---
+
+- Command: git init
+  Match: "!.git"
+
 Functions:
   CopyPath: true
+  EditGlobal: true

@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Windows;
 using System.Windows.Forms;
@@ -36,21 +37,39 @@ namespace ShellCommand.DataModel
             }
         }
 
-        public ToolStripMenuItem ToMenuItem(string workingDir)
+        public bool IsMatch(string workingDir)
         {
-            var item = new ToolStripMenuItem(string.IsNullOrEmpty(Name) ? Command : Name);
+            if (string.IsNullOrEmpty(Match))
+                return true;
+
+            bool reverse = false;
+            string pattern = Match;
+            if (Match.StartsWith("!"))
+            {
+                reverse = true;
+                pattern = Match.Substring(1);
+            }
+
+            var exist = Directory.GetFiles(workingDir, pattern).Any() || Directory.GetDirectories(workingDir, pattern).Any();
+            return exist ^ reverse;
+        }
+
+        public ToolStripItem ToMenuItem(string workingDir)
+        {
+            if(string.IsNullOrEmpty(Command) && Name == Env.VAR_SEPNAME)
+            {
+                return new ToolStripSeparator();
+            }
+
+            var display = string.IsNullOrEmpty(Name) ? Command : Name;
+            var item = new ToolStripMenuItem(display)
+            {
+                Enabled = IsMatch(workingDir),
+            };
             item.Click += (sender, args) =>
             {
                 Execute(workingDir);
             };
-            if (!string.IsNullOrEmpty(Match))
-            {
-                var matchPath = Path.Combine(workingDir, Match);
-                if (!File.Exists(matchPath) && !Directory.Exists(matchPath))
-                {
-                    item.Enabled = false;
-                }
-            }
             return item;
         }
     }

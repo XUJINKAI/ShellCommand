@@ -4,10 +4,12 @@ Customize your context menu by Single file.
 
 ![](/docs/screenshot.png)
 
-### Feature
+## Feature
 
 - Custom one folder's context menu by `.shellcommand.yaml`
 - Custom global context menu by `global.shellcommand.yaml`
+- Command Support %DIR% variable
+- Command Support Wildcard syntax !?*
 
 ## Usage
 

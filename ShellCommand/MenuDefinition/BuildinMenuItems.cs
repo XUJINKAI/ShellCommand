@@ -47,13 +47,12 @@ namespace ShellCommand.MenuDefinition
 
         public static ToolStripMenuItem OpenApp()
         {
-            var path = Util.Reg.GetExePath();
-            var cmd = new DirectoryCommand()
+            var item = new ToolStripMenuItem(Env.OpenAppText);
+            item.Click += (sender, args) =>
             {
-                Name = Env.OpenAppText,
-                Command = path,
+                Cmd.RunAsInvoker(Util.Reg.GetExePath(), "");
             };
-            return cmd.ToMenuItem(Path.GetDirectoryName(path));
+            return item;
         }
 
     }

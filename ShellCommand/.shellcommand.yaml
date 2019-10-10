@@ -1,8 +1,0 @@
-# ShellCommand: https://github.com/XUJINKAI/ShellCommand 
-
-- Command: ServerRegistrationManager.exe config LoggingMode 6
-  Name: Enable Logging
-- Command: ServerRegistrationManager.exe config LoggingMode 0
-  Name: Disable Logging
-- Command: cmd /c taskkill /f /im explorer.exe & start explorer.exe
-  Name: Restart explorer
