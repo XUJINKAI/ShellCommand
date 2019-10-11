@@ -29,18 +29,23 @@ namespace ShellCommand.MenuDefinition
 
         protected override ContextMenuStrip CreateMenu()
         {
+            return CreateMenu(FolderPath, CommandFilePath);
+        }
+
+        internal static ContextMenuStrip CreateMenu(string workingDir, string CommandFilePath)
+        {
             var menu = new ContextMenuStrip();
             var container = new ToolStripMenuItem(Env.MenuDisplay);
 
             var list = new List<ToolStripItem>();
 
-            MenuItemsBuilder.ParseDirectoryCommandInto(list, CommandFilePath, FolderPath);
+            MenuItemsBuilder.ParseDirectoryCommandInto(list, CommandFilePath, workingDir);
             MenuItemsBuilder.AddSeparator(list);
 
             var globalSettingPath = Path.Combine(Env.GetAppFolder(), Env.GlobalSettingFileName);
             if (File.Exists(globalSettingPath))
             {
-                MenuItemsBuilder.ParseGlobalCommandInto(list, globalSettingPath, FolderPath);
+                MenuItemsBuilder.ParseGlobalCommandInto(list, globalSettingPath, workingDir);
             }
 
             list.Add(BuildinMenuItems.OpenApp());

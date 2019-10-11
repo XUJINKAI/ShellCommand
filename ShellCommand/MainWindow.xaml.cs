@@ -1,4 +1,5 @@
 ﻿using ShellCommand.DataModel;
+using ShellCommand.MenuDefinition;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -26,9 +27,16 @@ namespace ShellCommand
         const string ARG_INSTALL = "--install";
         const string ARG_UNINSTALL = "--uninstall";
 
+#if DEBUG
+        public Visibility DEBUG => Visibility.Visible;
+#else
+        public Visibility DEBUG => Visibility.Collapsed;
+#endif
+
         public MainWindow()
         {
             InitializeComponent();
+            this.DataContext = this;
             if(Environment.Is64BitOperatingSystem != Environment.Is64BitProcess)
             {
                 MessageBox.Show($"Please run x64 version instead.");
@@ -109,6 +117,11 @@ namespace ShellCommand
         {
             var configpath = System.IO.Path.Combine(XJK.ENV.BaseDirectory, Env.GlobalSettingFileName);
             Cmd.RunAsInvoker(configpath, "");
+        }
+
+        private void TestGlobalMenu(object sender, RoutedEventArgs e)
+        {
+            DirectoryBackgroundContextMenu.CreateMenu(Env.GetAppFolder(), "").Show(XJK.SysX.Device.Mouse.GetPosition());
         }
     }
 }
