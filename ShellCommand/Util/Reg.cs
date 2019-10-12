@@ -21,26 +21,33 @@ namespace ShellCommand.Util
 
         public static void SetLogPath()
         {
-            using (var key = Registry.LocalMachine.CreateSubKey(SUBKEY))
-            {
-                key.SetValue("LogPath", Env.GetLogPath(), RegistryValueKind.String);
-            }
+            using var key = Registry.LocalMachine.CreateSubKey(SUBKEY);
+            var logPath = Path.Combine(GetAppFolder(), Env.LogFileName);
+            key.SetValue("LogPath", logPath, RegistryValueKind.String);
+        }
+
+        public static string GetLogPath()
+        {
+            using var key = Registry.LocalMachine.CreateSubKey(SUBKEY);
+            return key.GetValue("LogPath") as string;
         }
 
         public static void SetExePath(string path)
         {
-            using (var key = Registry.LocalMachine.CreateSubKey(SUBKEY))
-            {
-                key.SetValue(ExePath, path, RegistryValueKind.String);
-            }
+            using var key = Registry.LocalMachine.CreateSubKey(SUBKEY);
+            key.SetValue(ExePath, path, RegistryValueKind.String);
         }
 
         public static string GetExePath()
         {
-            using (var key = Registry.LocalMachine.OpenSubKey(SUBKEY))
-            {
-                return key.GetValue(ExePath) as string;
-            }
+            using var key = Registry.LocalMachine.OpenSubKey(SUBKEY);
+            return key.GetValue(ExePath) as string;
+        }
+
+        public static string GetAppFolder()
+        {
+            var path = GetExePath();
+            return Path.GetDirectoryName(path);
         }
     }
 }

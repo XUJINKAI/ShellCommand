@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
@@ -14,7 +15,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
-using System.Windows.Shapes;
+using XJK;
 using XJK.SysX;
 
 namespace ShellCommand
@@ -43,7 +44,7 @@ namespace ShellCommand
                 App.Current.Shutdown();
             }
 
-            if (XJK.ENV.IsAdministrator()) Title += " (Admin)";
+            if (ENV.IsAdministrator()) Title += " (Admin)";
             if (Environment.GetCommandLineArgs().Length == 2)
             {
                 switch (Environment.GetCommandLineArgs()[1])
@@ -62,66 +63,98 @@ namespace ShellCommand
 
         private void Install(object sender, RoutedEventArgs e)
         {
-            if (XJK.ENV.IsAdministrator())
+            if (ENV.IsAdministrator())
             {
                 AdminInstall();
             }
             else
             {
-                Cmd.RunAsAdmin(XJK.ENV.EntryLocation, ARG_INSTALL);
+                Cmd.RunAsAdmin(ENV.EntryLocation, ARG_INSTALL);
             }
 
-            var globalfile = System.IO.Path.Combine(XJK.ENV.BaseDirectory, Env.GlobalSettingFileName);
+            var globalfile = Path.Combine(ENV.BaseDirectory, Env.GlobalSettingFileName);
             if (!File.Exists(globalfile))
             {
-                var templatefile = System.IO.Path.Combine(XJK.ENV.BaseDirectory, Env.GlobalTemplateSettingFileName);
-                if (File.Exists(templatefile))
-                {
-                    var templateObj = Util.Yaml.LoadYaml<GlobalConfig>(templatefile);
-                    Util.Yaml.SaveYaml(globalfile, templateObj);
-                }
+                ResetGlobalSettingFile(false);
             }
         }
 
         private void Uninstall(object sender, RoutedEventArgs e)
         {
-            if (XJK.ENV.IsAdministrator())
+            if (ENV.IsAdministrator())
             {
                 AdminUninstall();
             }
             else
             {
-                Cmd.RunAsAdmin(XJK.ENV.EntryLocation, ARG_UNINSTALL);
+                Cmd.RunAsAdmin(ENV.EntryLocation, ARG_UNINSTALL);
             }
         }
 
         private void AdminInstall()
         {
-            Util.Reg.SetExePath(XJK.ENV.EntryLocation);
+            Util.Reg.SetExePath(ENV.EntryLocation);
             Util.Reg.SetLogPath();
-            Cmd.RunAsInvoker(Env.GetSrmPath(), "install ShellCommand.exe -codebase");
+            var srm = Path.Combine(ENV.BaseDirectory, Env.SrmExeName);
+            Cmd.RunAsInvoker(srm, "install ShellCommand.exe -codebase");
         }
            
         private void AdminUninstall()
         {
-            Cmd.RunAsInvoker(Env.GetSrmPath(), "uninstall ShellCommand.exe");
+            var srm = Path.Combine(ENV.BaseDirectory, Env.SrmExeName);
+            Cmd.RunAsInvoker(srm, "uninstall ShellCommand.exe");
             Util.Reg.DeleteSubKey();
         }
 
-        private void OpenAppSettingFolder(object sender, RoutedEventArgs e)
+        private void OpenAppFolder(object sender, RoutedEventArgs e)
         {
-            Cmd.RunAsInvoker("explorer", Env.GetAppFolder());
+            Cmd.RunAsInvoker("explorer", ENV.BaseDirectory);
         }
 
         private void EditGlobalSettingFile(object sender, RoutedEventArgs e)
         {
-            var configpath = System.IO.Path.Combine(XJK.ENV.BaseDirectory, Env.GlobalSettingFileName);
+            var configpath = Path.Combine(ENV.BaseDirectory, Env.GlobalSettingFileName);
             Cmd.RunAsInvoker(configpath, "");
         }
 
-        private void TestGlobalMenu(object sender, RoutedEventArgs e)
+        private void ResetGlobalSettingFile(object sender, RoutedEventArgs e)
         {
-            DirectoryBackgroundContextMenu.CreateMenu(Env.GetAppFolder(), "").Show(XJK.SysX.Device.Mouse.GetPosition());
+            ResetGlobalSettingFile(true);
         }
+
+        private void ResetGlobalSettingFile(bool showMessage)
+        {
+            var templatefile = Path.Combine(ENV.BaseDirectory, Env.GlobalTemplateSettingFileName);
+            var targetfile = Path.Combine(ENV.BaseDirectory, Env.GlobalSettingFileName);
+            if (!File.Exists(templatefile))
+            {
+                if (showMessage)
+                {
+                    MessageBox.Show("Template global setting file NOT exist!", Env.AppName);
+                }
+                return;
+            }
+            if (File.Exists(targetfile))
+            {
+                if (showMessage)
+                {
+                    var result = MessageBox.Show("Global setting file will be overwrite, sure?", Env.AppName, MessageBoxButton.OKCancel);
+                    if (result == MessageBoxResult.Cancel)
+                    {
+                        return;
+                    }
+                }
+            }
+            File.Copy(templatefile, targetfile, true);
+        }
+
+        private void TestGlobalTemplateMenu(object sender, RoutedEventArgs e)
+        {
+            var position = XJK.SysX.Device.Mouse.GetPosition();
+            var globalPath = Path.Combine(ENV.BaseDirectory, Env.GlobalTemplateSettingFileName);
+            var menu = MenuCreator.Create(ENV.BaseDirectory, "", globalPath);
+            menu.Show(position);
+        }
+
     }
 }

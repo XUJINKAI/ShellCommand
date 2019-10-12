@@ -42,10 +42,23 @@
         <Grid Grid.Row="1" Margin="20">
             <StackPanel>
                 <StackPanel Orientation="Horizontal" Visibility="{Binding DEBUG}">
-                    <Button Click="TestGlobalMenu">Test GlobalMenu</Button>
+                    <Button Click="TestGlobalTemplateMenu">Show Global Template Menu</Button>
                 </StackPanel>
-                <wpf:Link Content="Open App Setting Folder" Click="OpenAppSettingFolder"></wpf:Link>
-                <wpf:Link Content="Edit Global Setting File" Click="EditGlobalSettingFile"></wpf:Link>
+                <wpf:Link Content="Open App Folder" Click="OpenAppFolder"></wpf:Link>
+                <DockPanel>
+                    <wpf:Link Content="Reset Global Setting" DockPanel.Dock="Right" Click="ResetGlobalSettingFile">
+                        <wpf:Link.HyperLinkStyle>
+                            <Style TargetType="Hyperlink">
+                                <Style.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="False">
+                                        <Setter Property="Foreground" Value="Gray"></Setter>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </wpf:Link.HyperLinkStyle>
+                    </wpf:Link>
+                    <wpf:Link Content="Edit Global Setting File" Click="EditGlobalSettingFile"></wpf:Link>
+                </DockPanel>
                 <Label></Label>
                 <wpf:AutoLinkTextBlock xml:space="preserve">
 Install: Easy Press Install Button. 

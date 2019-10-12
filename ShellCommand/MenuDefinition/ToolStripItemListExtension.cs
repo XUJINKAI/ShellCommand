@@ -1,4 +1,5 @@
 ﻿using ShellCommand.DataModel;
+using ShellCommand.Util;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -11,9 +12,9 @@ using XJK.SysX.CommandHelper;
 
 namespace ShellCommand.MenuDefinition
 {
-    static class MenuItemsBuilder
+    static class ToolStripItemListExtension
     {
-        public static void AddSeparator(List<ToolStripItem> result)
+        public static void AddSeparator(this List<ToolStripItem> result)
         {
             if (result.Count > 0 && !(result.Last() is ToolStripSeparator))
             {
@@ -21,11 +22,11 @@ namespace ShellCommand.MenuDefinition
             }
         }
 
-        public static void ParseDirectoryCommandInto(List<ToolStripItem> result, string path, string workingDir)
+        public static void AddParseDirectoryCommandInto(this List<ToolStripItem> result, string path, string workingDir)
         {
             try
             {
-                var entries = Util.Yaml.LoadYaml<DirectoryCommand[]>(path);
+                var entries = Yaml.LoadYaml<DirectoryCommand[]>(path);
                 foreach (var entry in entries)
                 {
                     var item = entry.ToMenuItem(workingDir);
@@ -39,14 +40,18 @@ namespace ShellCommand.MenuDefinition
                     }
                 }
             }
-            catch { }
+            catch(Exception ex)
+            {
+                var logPath = Reg.GetLogPath();
+                File.AppendAllText(logPath, $"{Environment.NewLine}{ex.Message}{Environment.NewLine}{ex.StackTrace}");
+            }
         }
 
-        public static void ParseGlobalCommandInto(List<ToolStripItem> result, string path, string workingDir)
+        public static void AddParseGlobalCommandInto(this List<ToolStripItem> result, string path, string workingDir)
         {
             try
             {
-                var config = Util.Yaml.LoadYaml<GlobalConfig>(path);
+                var config = Yaml.LoadYaml<GlobalConfig>(path);
                 foreach (var entry in config.GlobalCommands)
                 {
                     var item = entry.ToMenuItem(workingDir);
@@ -64,14 +69,18 @@ namespace ShellCommand.MenuDefinition
 
                 if (config.Functions.CopyPath)
                 {
-                    result.Add(BuildinMenuItems.GetCopyPathMenuItem(workingDir));
+                    result.Add(MenuCreator.GetCopyPathMenuItem(workingDir));
                 }
                 if (config.Functions.EditGlobal)
                 {
-                    result.Add(BuildinMenuItems.OpenGlobalSetting());
+                    result.Add(MenuCreator.GetOpenGlobalSettingMenuItem());
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                var logPath = Reg.GetLogPath();
+                File.AppendAllText(logPath, $"{Environment.NewLine}{ex.Message}{Environment.NewLine}{ex.StackTrace}");
+            }
         }
     }
 }

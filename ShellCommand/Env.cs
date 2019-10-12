@@ -14,6 +14,9 @@ namespace ShellCommand
         public const string GlobalSettingFileName= "global.shellcommand.yaml";
         public const string GlobalTemplateSettingFileName = "global.template.shellcommand.yaml";
 
+        public const string SrmExeName = "ServerRegistrationManager.exe";
+        public const string LogFileName = "log.txt";
+
         public const string CreateFolderSpecificFileText = "Create .shellcommand.yaml";
         public const string OpenGlobalSettingFileText = "Edit Global Setting";
         public const string OpenAppText = "Open ShellCommand";
@@ -22,22 +25,5 @@ namespace ShellCommand
 
         public const string VAR_DIR = "%DIR%";
         public const string VAR_SEPNAME = "---";
-
-        public static string GetAppFolder()
-        {
-            var path = Reg.GetExePath();
-            return Path.GetDirectoryName(path);
-        }
-
-        public static string GetSrmPath()
-        {
-            return Path.Combine(GetAppFolder(), "ServerRegistrationManager.exe");
-        }
-
-        public static string GetLogPath()
-        {
-            var appfolder = GetAppFolder();
-            return Path.Combine(appfolder, "log.txt");
-        }
     }
 }
