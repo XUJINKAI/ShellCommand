@@ -42,8 +42,8 @@ namespace ShellCommand.MenuDefinition
             }
             catch(Exception ex)
             {
-                var logPath = Reg.GetLogPath();
-                File.AppendAllText(logPath, $"{Environment.NewLine}{ex.Message}{Environment.NewLine}{ex.StackTrace}");
+                Logger.LogException(ex);
+                throw;
             }
         }
 
@@ -78,8 +78,8 @@ namespace ShellCommand.MenuDefinition
             }
             catch (Exception ex)
             {
-                var logPath = Reg.GetLogPath();
-                File.AppendAllText(logPath, $"{Environment.NewLine}{ex.Message}{Environment.NewLine}{ex.StackTrace}");
+                Logger.LogException(ex);
+                throw;
             }
         }
     }

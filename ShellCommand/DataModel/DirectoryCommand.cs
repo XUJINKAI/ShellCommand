@@ -1,4 +1,5 @@
-﻿using System;
+﻿using ShellCommand.Util;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -16,11 +17,19 @@ namespace ShellCommand.DataModel
         public string Name { get; set; }
         public string Match { get; set; }
         public bool RunAsAdmin { get; set; }
+        public string Icon { get; set; }
+
+        public static string ExpandEnvVars(string input, string workingDir)
+        {
+            var output = Environment.ExpandEnvironmentVariables(input);
+            output = output.Replace(Env.VAR_DIR, workingDir.Replace("\\", "/"));
+            return output;
+        }
 
         public void Execute(string workingDir)
         {
-            var repcommand = Command.Replace(Env.VAR_DIR, workingDir.Replace("\\", "/"));
-            var (com, arg) = Cmd.SplitCommandArg(repcommand);
+            var exCommand = ExpandEnvVars(Command, workingDir);
+            var (com, arg) = Cmd.SplitCommandArg(exCommand);
             ProcessInfoChain ProcessInfoChain = ProcessInfoChain.New(com, arg);
             if (RunAsAdmin)
             {
@@ -70,6 +79,11 @@ namespace ShellCommand.DataModel
             {
                 Execute(workingDir);
             };
+            if (!string.IsNullOrEmpty(Icon))
+            {
+                var exIcon = ExpandEnvVars(Icon, workingDir);
+                item.Image = NativeLoader.LocaImage(exIcon);
+            }
             return item;
         }
     }

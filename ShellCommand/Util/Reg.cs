@@ -28,7 +28,7 @@ namespace ShellCommand.Util
 
         public static string GetLogPath()
         {
-            using var key = Registry.LocalMachine.CreateSubKey(SUBKEY);
+            using var key = Registry.LocalMachine.OpenSubKey(SUBKEY);
             return key.GetValue("LogPath") as string;
         }
 

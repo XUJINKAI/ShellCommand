@@ -124,6 +124,8 @@
     <Compile Include="DataModel\GlobalConfig.cs" />
     <Compile Include="MenuDefinition\MenuCreator.cs" />
     <Compile Include="MenuDefinition\ToolStripItemListExtension.cs" />
+    <Compile Include="Util\Logger.cs" />
+    <Compile Include="Util\NativeLoader.cs" />
     <Compile Include="Util\Reg.cs" />
     <Compile Include="Util\Yaml.cs" />
     <Page Include="MainWindow.xaml">

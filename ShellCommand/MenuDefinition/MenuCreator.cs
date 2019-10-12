@@ -35,7 +35,7 @@ namespace ShellCommand.MenuDefinition
             if (!File.Exists(directoryFilePath))
             {
                 list.AddSeparator();
-                list.Add(GetInitDirectoryFileMenuItem(directoryFilePath));
+                list.Add(GetCreateDirecotyCommandFileMenuItem(directoryFilePath));
             }
 
             container.DropDownItems.AddRange(list.ToArray());
@@ -56,13 +56,14 @@ namespace ShellCommand.MenuDefinition
             return item;
         }
 
-        public static ToolStripMenuItem GetInitDirectoryFileMenuItem(string path)
+        public static ToolStripMenuItem GetCreateDirecotyCommandFileMenuItem(string path)
         {
             var item = new ToolStripMenuItem(Env.CreateFolderSpecificFileText);
             item.Click += (sender, args) =>
             {
-                Util.Yaml.SaveYaml(path, DefaultSetting.GetDirectoryCommand());
+                Yaml.SaveYaml(path, DefaultSetting.GetDirectoryCommand());
             };
+            item.Image = NativeLoader.GetShell32Icon(70);
             return item;
         }
 
@@ -80,10 +81,12 @@ namespace ShellCommand.MenuDefinition
         public static ToolStripMenuItem GetOpenAppMenuItem()
         {
             var item = new ToolStripMenuItem(Env.OpenAppText);
+            var exe = Reg.GetExePath();
             item.Click += (sender, args) =>
             {
-                Cmd.RunAsInvoker(Reg.GetExePath(), "");
+                Cmd.RunAsInvoker(exe, "");
             };
+            item.Image = NativeLoader.GetShell32Icon(2);
             return item;
         }
 

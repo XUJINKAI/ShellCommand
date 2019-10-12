@@ -2,26 +2,34 @@
 
 GlobalCommands:
 - Name: Open SourceTree Here
-  Command: cmd /c start %LocalAppData%\SourceTree\SourceTree.exe -f "%DIR%"
+  Command: "%LocalAppData%/SourceTree/SourceTree.exe -f %DIR%"
   Match: .git
+  Icon: "%LocalAppData%/SourceTree/SourceTree.exe"
 
 - Command: git pull
   Match: .git
+  Icon: "%PROGRAMFILES%/Git/git-cmd.exe"
+
 - Command: git submodule update --init --recursive
   Match: .gitmodules
+  Icon: "%PROGRAMFILES%/Git/git-cmd.exe"
 
 - Name: ---
 
 - Name: "Open Command Window Here(&C)"
   Command: cmd
+  Icon: C:/WIndows/System32/cmd.exe
+
 - Name: Open Command Window Here (Administrator)
   Command: cmd /K "cd /d ""%DIR%"""
   RunAsAdmin: true
+  Icon: C:/WIndows/System32/cmd.exe
 
 - Name: ---
 
 - Command: git init
   Match: "!.git"
+  Icon: "%PROGRAMFILES%/Git/git-cmd.exe"
 
 Functions:
   CopyPath: true

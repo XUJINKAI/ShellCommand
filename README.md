@@ -1,19 +1,43 @@
 # ShellCommand
 
-Customize your context menu by Single file.
+Customize your context menu.
 
-![](/docs/screenshot.png)
+![screenshot](/docs/screenshot.png)
 
 ## Feature
 
 - Custom one folder's context menu by `.shellcommand.yaml`
 - Custom global context menu by `global.shellcommand.yaml`
-- Command Support %DIR% variable
-- Command Support Wildcard syntax !?*
+- Support Environment variable
+- Support Wildcard syntax !?* Match
+- Support Menu Item Icon
 
 ## Usage
 
 Open ShellCommand.exe, Click Install, Bingo!
+
+### Command
+
+Support [all windows variables](https://pureinfotech.com/list-environment-variables-windows-10/) like `%LocalAppData%`,
+
+Plus, `%DIR%` stands for current folder.
+
+### Match
+
+- If not null, checks if current folder have the name (file or directory)
+- Starts by ! for NOT have the name
+- use ? and * for wildcard
+
+### Icon
+
+- Exe associated icon
+- Dll resource, use `?index` for index number
+    e.g. `%SystemRoot%\System32\Shell32.dll?3`
+
+### Name
+
+- `---` for separator
+- If ignored, command text will be used.
 
 ## Known Issues
 
