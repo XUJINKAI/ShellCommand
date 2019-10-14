@@ -16,11 +16,11 @@ GlobalCommands:
 
 - Name: ---
 
-- Name: "Open Command Window Here(&C)"
+- Name: Open Command Window Here(&C)
   Command: cmd
   Icon: C:/WIndows/System32/cmd.exe
 
-- Name: Open Command Window Here (Administrator)
+- Name: Open Command Window Here (Administrator)(&A)
   Command: cmd /K "cd /d ""%DIR%"""
   RunAsAdmin: true
   Icon: C:/WIndows/System32/cmd.exe
