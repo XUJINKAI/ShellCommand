@@ -13,8 +13,8 @@ namespace ShellCommand.DataModel
 {
     public class DirectoryCommand
     {
-        public string Command { get; set; }
         public string Name { get; set; }
+        public string Command { get; set; }
         public string Match { get; set; }
         public bool RunAsAdmin { get; set; }
         public string Icon { get; set; }

@@ -61,7 +61,12 @@ namespace ShellCommand.MenuDefinition
             var item = new ToolStripMenuItem(Env.CreateFolderSpecificFileText);
             item.Click += (sender, args) =>
             {
-                Yaml.SaveYaml(path, DefaultSetting.GetDirectoryCommand());
+                var o = new DirectoryCommand[] 
+                {
+                    new DirectoryCommand(){ Name = "Custom Command", Command = "cmd" },
+                };
+                Yaml.SaveYaml(path, o);
+                File.SetAttributes(path, FileAttributes.Hidden);
             };
             item.Image = NativeLoader.GetShell32Icon(70);
             return item;

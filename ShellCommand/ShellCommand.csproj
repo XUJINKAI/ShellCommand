@@ -120,7 +120,6 @@
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </ApplicationDefinition>
-    <Compile Include="DataModel\DefaultSetting.cs" />
     <Compile Include="DataModel\GlobalConfig.cs" />
     <Compile Include="MenuDefinition\MenuCreator.cs" />
     <Compile Include="MenuDefinition\ToolStripItemListExtension.cs" />
