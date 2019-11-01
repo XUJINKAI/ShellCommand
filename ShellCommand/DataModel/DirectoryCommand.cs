@@ -51,16 +51,20 @@ namespace ShellCommand.DataModel
             if (string.IsNullOrEmpty(Match))
                 return true;
 
-            bool reverse = false;
-            string pattern = Match;
-            if (Match.StartsWith("!"))
+            bool result = true;
+            foreach (var split in Match.Split(new string[] { "<&&>" }, StringSplitOptions.RemoveEmptyEntries))
             {
-                reverse = true;
-                pattern = Match.Substring(1);
+                var pattern = split;
+                bool reverse = false;
+                if (pattern.StartsWith("!"))
+                {
+                    reverse = true;
+                    pattern = pattern.Substring(1);
+                }
+                var exist = Directory.GetFiles(workingDir, pattern).Any() || Directory.GetDirectories(workingDir, pattern).Any();
+                result &= exist ^ reverse;
             }
-
-            var exist = Directory.GetFiles(workingDir, pattern).Any() || Directory.GetDirectories(workingDir, pattern).Any();
-            return exist ^ reverse;
+            return result;
         }
 
         public ToolStripItem ToMenuItem(string workingDir)

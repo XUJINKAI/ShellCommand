@@ -14,16 +14,21 @@ GlobalCommands:
   Match: .gitmodules
   Icon: "%PROGRAMFILES%/Git/git-cmd.exe"
 
+- Name: Create README.md
+  Command: cmd /c copy nul README.md
+  Match: ".git<&&>!README.md"
+  Icon: "%SystemRoot%/System32/Shell32.dll?70"
+
 - Name: ---
 
 - Name: Open Command Window Here(&C)
   Command: cmd
-  Icon: C:/WIndows/System32/cmd.exe
+  Icon: "%SystemRoot%/System32/cmd.exe"
 
 - Name: Open Command Window Here (Administrator)(&A)
   Command: cmd /K "cd /d ""%DIR%"""
   RunAsAdmin: true
-  Icon: C:/WIndows/System32/cmd.exe
+  Icon: "%SystemRoot%/System32/cmd.exe"
 
 - Name: ---
 

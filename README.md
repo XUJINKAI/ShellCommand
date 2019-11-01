@@ -25,8 +25,9 @@ Plus, `%DIR%` stands for current folder.
 ### Match
 
 - If not null, checks if current folder have the name (file or directory)
-- Starts by ! for NOT have the name
-- use ? and * for wildcard
+- Splits conditions by **<&&>**
+- Starts by **!** for reverse condition
+- Use **?** and ***** for wildcard
 
 ### Icon
 
