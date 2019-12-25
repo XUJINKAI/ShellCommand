@@ -1,7 +1,7 @@
 # ShellCommand: https://github.com/XUJINKAI/ShellCommand 
 
 GlobalCommands:
-- Name: Open SourceTree Here
+- Name: Open SourceTree Here(&S)
   Command: "%LocalAppData%/SourceTree/SourceTree.exe -f %DIR%"
   Match: .git
   Icon: "%LocalAppData%/SourceTree/SourceTree.exe"
@@ -18,6 +18,10 @@ GlobalCommands:
   Command: cmd /c copy nul README.md
   Match: ".git<&&>!README.md"
   Icon: "%SystemRoot%/System32/Shell32.dll?70"
+  
+- Name: git clean
+  Command: git clean -dxfq -e ".vs" -e ".vscode"
+  Match: .git
 
 - Name: ---
 
