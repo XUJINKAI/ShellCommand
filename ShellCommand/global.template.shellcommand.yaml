@@ -20,7 +20,7 @@ GlobalCommands:
   Icon: "%SystemRoot%/System32/Shell32.dll?70"
   
 - Name: git clean
-  Command: git clean -dxfq -e ".vs" -e ".vscode"
+  Command: git clean -dXf -e "!.vs" -e "!.vscode"
   Match: .git
 
 - Name: ---
