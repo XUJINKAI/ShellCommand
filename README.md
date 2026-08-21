@@ -1,49 +1,51 @@
-# ShellCommand
+# ShellCommand 11
 
-Customize your context menu.
+[中文说明](README_cn.md)
 
-![screenshot](docs\screenshot\win10-screenshot.png)
+ShellCommand 11 is a Windows 11 context-menu tool. It reads a small, documented YAML configuration in the current folder, combines it with a per-user global configuration, and exposes matching commands in the modern `Directory\Background` menu.
 
-## Feature
+The repository contains the first working implementation baseline:
 
-- Custom one folder's context menu by `.shellcommand.yaml`
-- Custom global context menu by `global.shellcommand.yaml`
-- Support Environment variable
-- Support Wildcard syntax !?* Match
-- Support Menu Item Icon
+- `ShellCommand.Core`: platform-independent matching, menu resolution, variables, and immutable action models.
+- `ShellCommand.Config.Yaml`: bounded YamlDotNet adapter with unknown-field, feature, schema, and semantic validation.
+- `ShellCommand.Broker`: per-user pipe server, configuration cache/LKG, action tokens, command launch, and reversible menu-manager primitives.
+- `ShellCommand.App`: minimal WPF diagnostics/configuration shell.
+- `ShellCommand.Explorer`: native C++ `IExplorerCommand` adapter with bounded IPC and fallback behavior.
+- `packaging`: sparse-package manifest and repeatable development install/uninstall scripts.
 
-## Usage
+## Build and test
 
-Open ShellCommand.exe, Click Install, Bingo!
+```powershell
+dotnet restore ShellCommand11.sln
+dotnet build ShellCommand11.sln
+dotnet test ShellCommand11.sln --no-build
+```
 
-### Command
+To build the native adapter and stage a development package from a Visual Studio developer environment:
 
-Support [all windows variables](https://pureinfotech.com/list-environment-variables-windows-10/) like `%LocalAppData%`,
+```powershell
+.\packaging\scripts\Install-Dev.ps1
+.\packaging\scripts\Restart-Explorer.ps1
+```
 
-Plus, `%DIR%` stands for current folder.
+Remove only the ShellCommand integration with:
 
-### Match
+```powershell
+.\packaging\scripts\Uninstall-Dev.ps1
+```
 
-- If not null, checks if current folder have the name (file or directory)
-- Splits conditions by **<&&>**
-- Starts by **!** for reverse condition
-- Use **?** and **\*** for wildcard
+The uninstall script preserves `%LOCALAPPDATA%\ShellCommand11\config` by default. Use `-PurgeUserData` only when explicitly deleting user data is intended.
 
-### Icon
+## Configuration
 
-- Exe associated icon
-- Dll resource, use `?index` for index number
-    e.g. `%SystemRoot%\System32\Shell32.dll?3`
+Directory configuration is `.shellcommand.yaml` and uses the documented legacy-compatible fields:
 
-### Name
+```yaml
+- Name: Open Terminal
+  Command: wt.exe -d "%DIR%"
+  Match: .git<&&>!README.md
+```
 
-- `---` for separator
-- If ignored, command text will be used.
+Global configuration is `%LOCALAPPDATA%\ShellCommand11\config\global.shellcommand.yaml`. See [the configuration contract](docs/contracts/config.md) for limits, diagnostics, separators, wildcard matching, and merge order.
 
-## Known Issues
-
-- After Uninstall, explorer.exe keep loading program. You should restart explorer to release or the file cannot be deleted.
-
-## LICENSE
-
-MIT License.
+The native Explorer adapter never parses YAML, loads CLR, runs user commands, scans the registry, or accesses the network. All dynamic work is bounded behind the per-user Broker pipe; failures degrade to `Open ShellCommand 11` without UI error dialogs.

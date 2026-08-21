@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>ShellCommand.Broker</AssemblyName>
+    <RootNamespace>ShellCommand.Broker</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\ShellCommand.Core\ShellCommand.Core.csproj" />
+    <ProjectReference Include="..\ShellCommand.Config.Yaml\ShellCommand.Config.Yaml.csproj" />
+  </ItemGroup>
+</Project>

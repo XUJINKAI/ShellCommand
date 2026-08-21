@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>ShellCommand.Config.Yaml</AssemblyName>
+    <RootNamespace>ShellCommand.Config.Yaml</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\ShellCommand.Core\ShellCommand.Core.csproj" />
+    <PackageReference Include="YamlDotNet" Version="7.0.0" />
+  </ItemGroup>
+</Project>

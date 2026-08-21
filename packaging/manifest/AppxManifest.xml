@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10" xmlns:desktop6="http://schemas.microsoft.com/appx/manifest/desktop/windows10/6" IgnorableNamespaces="uap com desktop6">
+  <Identity Name="ShellCommand11" Publisher="CN=ShellCommand11-Dev" Version="11.0.0.0" />
+  <Properties>
+    <DisplayName>ShellCommand 11</DisplayName>
+    <PublisherDisplayName>ShellCommand</PublisherDisplayName>
+    <Description>Windows 11 context menu commands</Description>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+  <Resources><Resource Language="en-us" /></Resources>
+  <Applications>
+    <Application Id="ShellCommand" Executable="ShellCommand.App.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements AppListEntry="none" DisplayName="ShellCommand 11" Description="Windows 11 context menu commands" Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png" />
+      <Extensions>
+        <Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:SurrogateServer DisplayName="ShellCommand Explorer Surrogate">
+              <com:Class Id="{B8B3D4E2-11A0-4A5B-8D2C-7D0A0DB10111}" Path="ShellCommand.Explorer.dll" ThreadingModel="both" />
+            </com:SurrogateServer>
+          </com:ComServer>
+        </Extension>
+        <desktop6:Extension Category="windows.fileExplorerContextMenus">
+          <desktop6:FileExplorerContextMenus>
+            <desktop6:ItemType Type="Directory\Background">
+              <desktop6:Verb Id="ShellCommand" Clsid="{B8B3D4E2-11A0-4A5B-8D2C-7D0A0DB10111}" />
+            </desktop6:ItemType>
+          </desktop6:FileExplorerContextMenus>
+        </desktop6:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+</Package>
