@@ -2,7 +2,7 @@
 
 Customize your context menu.
 
-![screenshot](/docs/screenshot.png)
+![screenshot](docs\screenshot\win10-screenshot.png)
 
 ## Feature
 

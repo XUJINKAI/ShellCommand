@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://xujinkai.net/schemas/shellcommand11-config.schema.json",
+  "title": "ShellCommand 11 Config Core Schema",
+  "description": "Machine-readable core field schema. YAML-specific restrictions such as anchors/aliases are enforced by the YAML adapter and are not fully expressible here.",
+  "$defs": {
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "Name": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "Command": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "Match": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "RunAsAdmin": {
+          "type": "boolean",
+          "default": false
+        },
+        "Icon": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "Command"
+          ]
+        },
+        {
+          "required": [
+            "Name"
+          ],
+          "properties": {
+            "Name": {
+              "const": "---"
+            }
+          }
+        }
+      ]
+    },
+    "functions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "CopyPath": {
+          "type": "boolean",
+          "default": false
+        },
+        "EditGlobal": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "directoryConfig": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "$ref": "#/$defs/command"
+      }
+    },
+    "globalConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "GlobalCommands": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/command"
+          },
+          "default": []
+        },
+        "Functions": {
+          "$ref": "#/$defs/functions"
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/directoryConfig"
+    },
+    {
+      "$ref": "#/$defs/globalConfig"
+    }
+  ]
+}
