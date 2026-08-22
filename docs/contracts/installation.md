@@ -4,12 +4,14 @@
 
 安装完成后，用户无需手工运行 `regsvr32`、编辑注册表或开发者模式命令，就能在 Windows 11 modern File Explorer context menu 使用 ShellCommand。
 
+面向用户的发布形态是一个可直接解压的 `win-x64` ZIP。用户启动 ZIP 根目录中的 `ShellCommand.exe`，由该程序检测状态并执行安装、修复、卸载；PowerShell 脚本只保留给仓库开发和 CI 使用。
+
 ## Installed Components
 
 至少安装：
 
 ```text
-ShellCommand.App.exe
+ShellCommand.exe
 ShellCommand.Broker.exe
 ShellCommand.Explorer.dll
 supporting managed assemblies
@@ -113,15 +115,15 @@ config\global.shellcommand.yaml
 
 ## Dev Installation
 
-仓库必须提供可重复的 dev install/uninstall 流程，使 AI/开发者可以：
+仓库必须提供可重复的 dev build/package 流程；安装和卸载统一由 `ShellCommand.exe` 完成，使开发者可以：
 
 ```text
 build
-register sparse package
-start broker
-restart explorer
+package
+launch ShellCommand.exe
+click Install / Repair
 verify
-unregister
+click Uninstall when finished
 ```
 
-开发脚本不能要求手工查 GUID 后改注册表。
+开发入口使用 CMD，不要求手工查 GUID、运行 PowerShell 或编辑注册表。

@@ -2,7 +2,7 @@
 
 ## Scope
 
-ShellCommand.App 是管理和诊断界面，不是命令执行主路径。
+ShellCommand.exe 是面向用户的绿色包入口和管理界面，不是命令执行主路径。
 
 V11.0 优先简单清晰，不追求复杂 IDE 式编辑器。
 
@@ -39,14 +39,22 @@ Preview for Folder...
 Restart Explorer
 ```
 
-开发/安装场景可提供：
+首个用户版本必须提供：
+
+- 自动检测当前绿色包的安装状态；
+- `安装 / 修复`；
+- `卸载`；
+- 安装/卸载后的 Explorer 重启提示；
+- 安装失败时显示具体阶段和错误信息。
+
+开发/诊断场景可额外提供：
 
 ```text
 Register / Repair Integration
 Unregister Integration
 ```
 
-正式 installer 已接管安装时，这些按钮可以变成诊断/修复入口。
+绿色包入口本身负责安装和卸载，不要求用户运行 PowerShell 或其他安装脚本。
 
 ### Diagnostics
 

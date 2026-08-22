@@ -160,7 +160,7 @@ App 通过 Broker 获取业务状态。它不复制一份 YAML 解析/扫描逻�
              ▲
              │ local Named Pipe
 ┌────────────┴─────────────┐
-│ ShellCommand.App.exe     │
+│ ShellCommand.exe         │
 │ .NET 10 WPF              │
 └──────────────────────────┘
 ```

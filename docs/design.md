@@ -8,6 +8,8 @@
 项目名：`ShellCommand11`  
 首个版本：`11.0.0`
 
+面向用户的交付形态是一个 `win-x64` 绿色 ZIP。用户解压后直接打开 `ShellCommand.exe`，由应用自身完成安装状态检测、安装/修复、卸载和 Explorer 刷新；脚本只服务于开发构建与自动化验证。
+
 ## 背景
 
 旧 ShellCommand 面向 Windows 10，通过 SharpShell / `IContextMenu` COM 扩展在目录背景菜单中读取 `.shellcommand.yaml`，按目录内容动态生成命令。

@@ -4,7 +4,7 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
-    <AssemblyName>ShellCommand.App</AssemblyName>
+    <AssemblyName>ShellCommand</AssemblyName>
     <RootNamespace>ShellCommand.App</RootNamespace>
   </PropertyGroup>
   <ItemGroup>

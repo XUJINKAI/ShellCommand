@@ -31,7 +31,7 @@
 ```text
 ShellCommand11/
 ├── AGENTS.md
-├── ShellCommand11.sln
+├── ShellCommand.sln
 ├── docs/
 ├── src/
 │   ├── ShellCommand.Core/
@@ -56,16 +56,12 @@ ShellCommand11/
 初期至少提供：
 
 ```text
-build
-unit-test
-integration-test
-package-dev
-install-dev
-uninstall-dev
-restart-explorer
+packaging\scripts\Build.cmd
+packaging\scripts\Test.cmd
+packaging\scripts\Package.cmd
 ```
 
-可以通过 PowerShell 脚本、MSBuild target 或统一脚本封装；具体形式不是产品契约。
+安装、卸载和 Explorer 重启由发布包中的 `ShellCommand.exe` 负责；开发者生成包后也通过该 App 验证安装流程。
 
 ## 实现顺序
 

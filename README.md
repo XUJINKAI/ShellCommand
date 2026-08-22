@@ -9,32 +9,44 @@ The repository contains the first working implementation baseline:
 - `ShellCommand.Core`: platform-independent matching, menu resolution, variables, and immutable action models.
 - `ShellCommand.Config.Yaml`: bounded YamlDotNet adapter with unknown-field, feature, schema, and semantic validation.
 - `ShellCommand.Broker`: per-user pipe server, configuration cache/LKG, action tokens, command launch, and reversible menu-manager primitives.
-- `ShellCommand.App`: minimal WPF diagnostics/configuration shell.
+- `ShellCommand.App`: WPF user entry point and install manager, published as `ShellCommand.exe`.
 - `ShellCommand.Explorer`: native C++ `IExplorerCommand` adapter with bounded IPC and fallback behavior.
-- `packaging`: sparse-package manifest and repeatable development install/uninstall scripts.
+- `packaging`: sparse-package manifest and CMD build/test/portable-package entry points.
+
+## End-user usage
+
+The user-facing distribution is a portable `win-x64` ZIP. After extracting it, launch `ShellCommand.exe` from the ZIP root. The app detects the current integration state and provides Install/Repair, Uninstall, and Restart Explorer actions. Users do not need to run PowerShell scripts or edit the registry.
+
+After installation, right-click the empty area of a folder to open the `ShellCommand` menu. V11.0 supports `Directory\Background` only.
 
 ## Build and test
 
 ```powershell
-dotnet restore ShellCommand11.sln
-dotnet build ShellCommand11.sln
-dotnet test ShellCommand11.sln --no-build
+call packaging\scripts\Build.cmd Release
+call packaging\scripts\Test.cmd Release
 ```
 
 To build the native adapter and stage a development package from a Visual Studio developer environment:
 
 ```powershell
-.\packaging\scripts\Install-Dev.ps1
-.\packaging\scripts\Restart-Explorer.ps1
+call .\packaging\scripts\Build.cmd Release
 ```
 
-Remove only the ShellCommand integration with:
+Run the staged user app to install the integration:
+
+```text
+artifacts\Release\ShellCommand.exe
+```
+
+Install, uninstall, and Explorer restart are handled by the app. No PowerShell script is required.
+
+## Build a portable ZIP
 
 ```powershell
-.\packaging\scripts\Uninstall-Dev.ps1
+call .\packaging\scripts\Package.cmd Release
 ```
 
-The uninstall script preserves `%LOCALAPPDATA%\ShellCommand11\config` by default. Use `-PurgeUserData` only when explicitly deleting user data is intended.
+The output is `artifacts\ShellCommand-11.0.0-win-x64.zip`. It contains a self-contained `ShellCommand.exe`, Broker, native Explorer adapter, and sparse-package manifest.
 
 ## Configuration
 

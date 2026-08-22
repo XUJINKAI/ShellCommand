@@ -9,40 +9,48 @@ ShellCommand 11 是一个面向 Windows 11 的右键菜单工具。它读取当�
 - `ShellCommand.Core`：跨平台核心模型、Match 规则、变量展开和菜单解析。
 - `ShellCommand.Config.Yaml`：受限 YAML 适配器、字段校验和结构化诊断。
 - `ShellCommand.Broker`：每用户 Broker、Named Pipe、配置缓存、Last Known Good、action token、命令执行和右键菜单管理。
-- `ShellCommand.App`：WPF 配置与诊断界面。
+- `ShellCommand.App`：WPF 用户入口、状态检测和安装管理界面，发布后的程序名为 `ShellCommand.exe`。
 - `ShellCommand.Explorer`：原生 C++ `IExplorerCommand` 扩展，仅负责 Explorer 边界适配和限时 IPC。
-- `packaging`：Sparse Package manifest，以及开发安装、卸载和 Explorer 重启脚本。
+- `packaging`：Sparse Package manifest，以及开发构建、测试和绿色 ZIP 打包入口。
 
-## 构建与测试
+## 面向用户的使用方式
+
+发布包是一个绿色 ZIP。解压后直接运行根目录中的：
+
+```text
+ShellCommand.exe
+```
+
+程序会自动检测安装状态，并提供“安装 / 修复”“卸载”和“重启 Explorer”按钮。普通用户不需要运行 PowerShell、编辑注册表或执行其他安装命令。安装和卸载默认保留用户配置。
+
+安装完成后，在任意目录的空白处右键即可看到 `ShellCommand` 菜单。V11.0 只支持目录空白处右键，不处理选中的文件或文件夹。
+
+## 开发者构建与测试
 
 ```powershell
-dotnet restore ShellCommand11.sln
-dotnet build ShellCommand11.sln -c Release
-dotnet test ShellCommand11.sln -c Release --no-build
+call packaging\scripts\Build.cmd Release
+call packaging\scripts\Test.cmd Release
 ```
 
 项目使用 .NET 10。YAML 解析只存在于 `ShellCommand.Config.Yaml`，Core 不依赖 YamlDotNet、WPF、COM、Registry 或 Windows UI。
 
-## 开发安装
+## 生成绿色 ZIP
 
 在具备 Windows SDK 和 MSVC C++ 工具链的 Visual Studio 开发环境中运行：
 
 ```powershell
-.\packaging\scripts\Install-Dev.ps1 -Configuration Release
-.\packaging\scripts\Restart-Explorer.ps1
+call .\packaging\scripts\Package.cmd Release
 ```
 
-卸载开发集成：
+输出文件：
 
-```powershell
-.\packaging\scripts\Uninstall-Dev.ps1
+```text
+artifacts\ShellCommand-11.0.0-win-x64.zip
 ```
 
-默认卸载会保留用户配置 `%LOCALAPPDATA%\ShellCommand11\config`。只有明确需要删除所有用户数据时，才使用：
+该 ZIP 包含自包含的 `ShellCommand.exe`、Broker、Explorer 扩展和 sparse package manifest，可复制到其他 Windows 11 x64 电脑后直接运行。
 
-```powershell
-.\packaging\scripts\Uninstall-Dev.ps1 -PurgeUserData
-```
+生成 ZIP 后，运行 `artifacts\ShellCommand11-portable\ShellCommand.exe`，点击应用内的“安装 / 修复”完成开发安装；卸载和重启 Explorer 也在应用内完成。
 
 ## 配置示例
 
