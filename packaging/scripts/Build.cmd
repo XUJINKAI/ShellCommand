@@ -11,7 +11,9 @@ if /I not "%CONFIG%"=="Debug" if /I not "%CONFIG%"=="Release" (
 pushd "%~dp0..\.." || exit /b 1
 set "ROOT=%CD%"
 set "ARTIFACTS=%ROOT%\artifacts\%CONFIG%"
-if not exist "%ARTIFACTS%" mkdir "%ARTIFACTS%"
+set "APP_OUTPUT=%ROOT%\src\ShellCommand.App\bin\%CONFIG%\net10.0-windows"
+set "BROKER_OUTPUT=%ROOT%\src\ShellCommand.Broker\bin\%CONFIG%\net10.0"
+set "EXPLORER_OUTPUT=%ROOT%\x64\%CONFIG%\ShellCommand.Explorer.dll"
 
 call "%ROOT%\packaging\scripts\Build-Solution.cmd" "%CONFIG%"
 if errorlevel 1 (
@@ -20,20 +22,30 @@ if errorlevel 1 (
   exit /b 1
 )
 
-xcopy /E /I /Y "%ROOT%\src\ShellCommand.App\bin\%CONFIG%\net10.0-windows\*" "%ARTIFACTS%\" >nul
-if errorlevel 1 (
-  echo Could not stage the App output. 1>&2
-  popd
-  exit /b 1
-)
-xcopy /E /I /Y "%ROOT%\src\ShellCommand.Broker\bin\%CONFIG%\net10.0\*" "%ARTIFACTS%\" >nul
-if errorlevel 1 (
-  echo Could not stage the Broker output. 1>&2
-  popd
-  exit /b 1
-)
+if exist "%ARTIFACTS%" rmdir /S /Q "%ARTIFACTS%"
+mkdir "%ARTIFACTS%\Assets"
 
-if exist "%ROOT%\src\ShellCommand.Explorer\x64\%CONFIG%\ShellCommand.Explorer.dll" copy /Y "%ROOT%\src\ShellCommand.Explorer\x64\%CONFIG%\ShellCommand.Explorer.dll" "%ARTIFACTS%\" >nul
+rem Copy only files from the output roots. A recursive copy would leak a stale
+rem publish\win-x64 runtime directory into the developer package.
+for %%F in ("%APP_OUTPUT%\*") do if not exist "%%~fF\" copy /Y "%%~fF" "%ARTIFACTS%\" >nul
+for %%F in ("%BROKER_OUTPUT%\*") do if not exist "%%~fF\" copy /Y "%%~fF" "%ARTIFACTS%\" >nul
+copy /Y "%EXPLORER_OUTPUT%" "%ARTIFACTS%\" >nul
+copy /Y "%ROOT%\packaging\manifest\AppxManifest.xml" "%ARTIFACTS%\" >nul
+copy /Y "%ROOT%\docs\screenshot\win10-preview.png" "%ARTIFACTS%\Assets\StoreLogo.png" >nul
+copy /Y "%ROOT%\docs\screenshot\win10-preview.png" "%ARTIFACTS%\Assets\Square150x150Logo.png" >nul
+copy /Y "%ROOT%\docs\screenshot\win10-preview.png" "%ARTIFACTS%\Assets\Square44x44Logo.png" >nul
+copy /Y "%ROOT%\README_cn.md" "%ARTIFACTS%\README.md" >nul
+copy /Y "%ROOT%\packaging\scripts\Uninstall.cmd" "%ARTIFACTS%\Uninstall.cmd" >nul
+
+if not exist "%ARTIFACTS%\ShellCommand.exe" goto :stage_failed
+if not exist "%ARTIFACTS%\ShellCommand.Broker.exe" goto :stage_failed
+if not exist "%ARTIFACTS%\ShellCommand.Explorer.dll" goto :stage_failed
+if not exist "%ARTIFACTS%\AppxManifest.xml" goto :stage_failed
 echo Build output: %ARTIFACTS%
 popd
 exit /b 0
+
+:stage_failed
+echo Developer package is incomplete. 1>&2
+popd
+exit /b 1

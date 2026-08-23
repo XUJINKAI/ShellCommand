@@ -82,7 +82,7 @@ public sealed class InstallationManager
 
         try
         {
-            var registration = await RunPowerShellAsync($"$ErrorActionPreference = 'Stop'; Add-AppxPackage -Register {PowerShellLiteral(ManifestPath)} -ExternalLocation {PowerShellLiteral(AppRoot)} -ForceApplicationShutdown", cancellationToken).ConfigureAwait(false);
+            var registration = await RunPowerShellAsync($"$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; Add-AppxPackage -Register {PowerShellLiteral(ManifestPath)} -ExternalLocation {PowerShellLiteral(AppRoot)} -ForceApplicationShutdown", cancellationToken).ConfigureAwait(false);
             if (!registration.Success)
                 return new(false, "Windows 集成注册失败：" + registration.ErrorOrOutput, await GetStatusAsync(cancellationToken).ConfigureAwait(false));
 
@@ -105,12 +105,12 @@ public sealed class InstallationManager
     {
         try
         {
-            var registration = await RunPowerShellAsync($"$ErrorActionPreference = 'Stop'; Get-AppxPackage -Name {PowerShellLiteral(PackageName)} | Remove-AppxPackage", cancellationToken).ConfigureAwait(false);
+            StopInstalledBroker();
+            var registration = await RunPowerShellAsync($"$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; Get-AppxPackage -Name {PowerShellLiteral(PackageName)} | Remove-AppxPackage", cancellationToken).ConfigureAwait(false);
             if (!registration.Success)
                 return new(false, "Windows 集成注销失败：" + registration.ErrorOrOutput, await GetStatusAsync(cancellationToken).ConfigureAwait(false));
 
             RemoveAutoStart();
-            StopInstalledBroker();
             var after = await GetStatusAsync(cancellationToken).ConfigureAwait(false);
             return !after.PackageRegistered && !after.AutoStartRegistered
                 ? new(true, "ShellCommand 已卸载。用户配置文件已保留。右键菜单可能需要重启 Explorer。", after)
@@ -134,9 +134,11 @@ public sealed class InstallationManager
         Process.Start(new ProcessStartInfo("explorer.exe") { UseShellExecute = true });
     }
 
-    private async Task<bool> IsPackageRegisteredAsync(CancellationToken cancellationToken)
+    private static async Task<bool> IsPackageRegisteredAsync(CancellationToken cancellationToken)
     {
-        var result = await RunPowerShellAsync($"$package = Get-AppxPackage -Name {PowerShellLiteral(PackageName)} | Where-Object {{ $_.InstallLocation.TrimEnd('\\') -ieq {PowerShellLiteral(AppRoot)} }} | Select-Object -First 1; if ($null -ne $package) {{ 'true' }} else {{ 'false' }}", cancellationToken).ConfigureAwait(false);
+        // Detect registrations from an older extracted directory as well. Otherwise
+        // launching a newer copy would hide the old package and disable Uninstall.
+        var result = await RunPowerShellAsync($"$ProgressPreference = 'SilentlyContinue'; $package = Get-AppxPackage -Name {PowerShellLiteral(PackageName)} | Select-Object -First 1; if ($null -ne $package) {{ 'true' }} else {{ 'false' }}", cancellationToken).ConfigureAwait(false);
         return result.Success && string.Equals(result.Output.Trim(), "true", StringComparison.OrdinalIgnoreCase);
     }
 
@@ -194,18 +196,16 @@ public sealed class InstallationManager
         key?.DeleteValue(RunValueName, throwOnMissingValue: false);
     }
 
-    private void StopInstalledBroker()
+    private static void StopInstalledBroker()
     {
         foreach (var process in Process.GetProcessesByName("ShellCommand.Broker"))
         {
             try
             {
-                var path = process.MainModule?.FileName;
-                if (path is not null && string.Equals(Path.GetFullPath(path), BrokerPath, StringComparison.OrdinalIgnoreCase))
-                {
-                    process.Kill(entireProcessTree: true);
-                    process.WaitForExit(3000);
-                }
+                // Broker is a product-owned per-user process. Stop old extracted
+                // copies too, otherwise they can keep the previous package files locked.
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(3000);
             }
             catch (InvalidOperationException) { }
             catch (UnauthorizedAccessException) { }

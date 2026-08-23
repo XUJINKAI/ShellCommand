@@ -463,6 +463,11 @@ bool ExtractFilesystemPath(IShellItemArray* items, std::wstring& path) noexcept 
             return false;
         }
 
+        DWORD itemCount = 0;
+        if (FAILED(items->GetCount(&itemCount)) || itemCount == 0) {
+            return false;
+        }
+
         IShellItem* item = nullptr;
         if (FAILED(items->GetItemAt(0, &item)) || item == nullptr) {
             return false;
@@ -593,20 +598,22 @@ public:
         return S_OK;
     }
 
-    HRESULT GetState(IShellItemArray* items, BOOL, EXPCMDSTATE* state) noexcept override {
+    HRESULT GetState(IShellItemArray* items, BOOL fOkToBeSlow, EXPCMDSTATE* state) noexcept override {
         if (state == nullptr) {
             return E_POINTER;
         }
 
         *state = ECS_ENABLED;
-        if (isRoot_) {
-            // GetState 只提取路径，不请求 Broker；动态解析在 EnumSubCommands 执行。
+        if (isRoot_ && fOkToBeSlow) {
+            // Explorer 不允许慢操作时不触碰 IShellItemArray；动态解析在 EnumSubCommands 执行。
             std::wstring path;
             if (ExtractFilesystemPath(items, path)) {
                 currentDirectory_.swap(path);
             } else {
                 currentDirectory_.clear();
             }
+        } else if (isRoot_) {
+            currentDirectory_.clear();
         }
         return S_OK;
     }

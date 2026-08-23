@@ -50,7 +50,9 @@ artifacts\ShellCommand-11.0.0-win-x64.zip
 
 该 ZIP 包含自包含的 `ShellCommand.exe`、Broker、Explorer 扩展和 sparse package manifest，可复制到其他 Windows 11 x64 电脑后直接运行。
 
-生成 ZIP 后，运行 `artifacts\ShellCommand11-portable\ShellCommand.exe`，点击应用内的“安装 / 修复”完成开发安装；卸载和重启 Explorer 也在应用内完成。
+解压 ZIP 后，运行 ZIP 根目录中的 `ShellCommand.exe`，点击应用内的“安装 / 修复”完成安装；卸载和重启 Explorer 也在应用内完成。`artifacts\Release` 是开发构建目录，不是 ZIP 的替代品。
+
+如果右键菜单扩展导致 Explorer 反复重启，先关闭 ShellCommand 窗口，双击 ZIP 根目录中的 `Uninstall.cmd` 紧急注销集成；脚本会移除 package、自启动和 Broker，然后重启 Explorer。
 
 ## 配置示例
 

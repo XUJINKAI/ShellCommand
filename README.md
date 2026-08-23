@@ -26,7 +26,7 @@ call packaging\scripts\Build.cmd Release
 call packaging\scripts\Test.cmd Release
 ```
 
-To build the native adapter and stage a development package from a Visual Studio developer environment:
+To build the native adapter and stage a complete developer package from a Visual Studio developer environment:
 
 ```powershell
 call .\packaging\scripts\Build.cmd Release
@@ -39,6 +39,7 @@ artifacts\Release\ShellCommand.exe
 ```
 
 Install, uninstall, and Explorer restart are handled by the app. No PowerShell script is required.
+The `Debug`/`Release` directory is a developer package and requires the .NET 10 desktop runtime. For a self-contained package, use `Package.cmd` below.
 
 ## Build a portable ZIP
 
@@ -46,7 +47,7 @@ Install, uninstall, and Explorer restart are handled by the app. No PowerShell s
 call .\packaging\scripts\Package.cmd Release
 ```
 
-The output is `artifacts\ShellCommand-11.0.0-win-x64.zip`. It contains a self-contained `ShellCommand.exe`, Broker, native Explorer adapter, and sparse-package manifest.
+The only user-facing output is `artifacts\ShellCommand-11.0.0-win-x64.zip`. Its root contains the self-contained `ShellCommand.exe`, Broker, native Explorer adapter, and sparse-package manifest. The temporary staging directory is removed automatically.
 
 ## Configuration
 
