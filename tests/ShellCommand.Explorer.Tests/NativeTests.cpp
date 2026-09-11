@@ -79,6 +79,19 @@ void Exchange(Fault fault) {
 int main() {
     try {
         Check(GetCurrentUserSid() != L"unknown", "SID capture");
+        // ASan's first CreateThread can take longer than the production deadline.
+        // Check that cold requests fail closed, then measure protocol behavior warm.
+        // Do not increase the production 30ms deadline to accommodate instrumentation.
+        for (int warmup = 0; warmup < 2; ++warmup) {
+            std::vector<ChildData> cold;
+            const auto start = GetTickCount64();
+            Check(!Resolve(L"C:\\Test", cold), "cold missing broker accepted");
+            const auto elapsed = GetTickCount64() - start;
+            Check(elapsed < 150, "cold callback retained worker");
+            for (int i = 0; i < 200 && g_pendingRequests; ++i) Sleep(10);
+            Check(g_pendingRequests == 0, "cold worker not reclaimed");
+            std::cout << "Cold callback " << elapsed << "ms" << std::endl;
+        }
         for (const auto fault : {Fault::None, Fault::Fragmented, Fault::Slow, Fault::HalfHeader,
                 Fault::Disconnect, Fault::WrongId, Fault::Oversize, Fault::WrongVersion}) Exchange(fault);
         // Force cleanup to outlive the caller: request memory and module references
