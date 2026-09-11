@@ -18,6 +18,11 @@ public static class EntryPoint
             Console.WriteLine(result.Message);
             return result.Success ? 0 : 1;
         }
+        if (args.Contains("--check-installation", StringComparer.Ordinal))
+        {
+            try { return new InstallationManager().GetStatusAsync().GetAwaiter().GetResult().IsInstalled ? 0 : 1; }
+            catch (Exception) { return 1; }
+        }
         var application = new App();
         return application.Run();
     }

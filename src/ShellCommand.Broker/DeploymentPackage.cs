@@ -17,12 +17,25 @@ public static class DeploymentPackage
 
     public static string DataRoot => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ShellCommand11");
 
-    public static string Validate(string directory)
+    public static string Validate(string directory) => Inspect(directory).Build;
+
+    private sealed record Inspection(PackageManifest Manifest, byte[] Bytes, string Build);
+    private static Inspection Inspect(string directory)
     {
         var manifestPath = Path.Combine(directory, "build-manifest.json");
         using var input = File.OpenRead(manifestPath);
-        if (input.Length > 64 * 1024) throw new InvalidDataException("发布清单过大。");
-        var manifest = JsonSerializer.Deserialize<PackageManifest>(input) ?? throw new InvalidDataException("缺少发布清单。");
+        var bytes = new byte[64 * 1024 + 1];
+        var length = 0;
+        while (length < bytes.Length)
+        {
+            var count = input.Read(bytes, length, bytes.Length - length);
+            if (count == 0) break;
+            length += count;
+        }
+        if (length == bytes.Length) throw new InvalidDataException("发布清单过大。");
+        Array.Resize(ref bytes, length);
+        var offset = bytes.AsSpan().StartsWith(new byte[] { 0xEF, 0xBB, 0xBF }) ? 3 : 0;
+        var manifest = JsonSerializer.Deserialize<PackageManifest>(bytes.AsSpan(offset)) ?? throw new InvalidDataException("缺少发布清单。");
         if (manifest.Protocol != PipeProtocol.Version || manifest.Files is null || manifest.Files.Count is < 7 or > 32)
             throw new InvalidDataException("组件协议或发布清单不匹配。");
         var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -40,13 +53,13 @@ public static class DeploymentPackage
                 throw new InvalidDataException("文件校验失败：" + file.Path);
         }
         if (RequiredFiles.Any(p => !paths.Contains(p))) throw new InvalidDataException("安装资源不完整。");
-        input.Position = 0;
-        return Convert.ToHexString(SHA256.HashData(input)).ToLowerInvariant();
+        return new(manifest, bytes, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
     }
 
     public static string Stage(string source, string dataRoot)
     {
-        var build = Validate(source);
+        var inspected = Inspect(source);
+        var build = inspected.Build;
         var destination = Path.Combine(dataRoot, "runner", build);
         if (Directory.Exists(destination))
         {
@@ -57,14 +70,14 @@ public static class DeploymentPackage
         Directory.CreateDirectory(staging);
         try
         {
-            var manifest = JsonSerializer.Deserialize<PackageManifest>(File.ReadAllText(Path.Combine(source, "build-manifest.json")))!;
-            foreach (var file in manifest.Files)
+            // Never reopen an unvalidated inventory after validation (replacement race).
+            foreach (var file in inspected.Manifest.Files)
             {
                 var target = Path.Combine(staging, file.Path);
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                 File.Copy(Path.Combine(source, file.Path), target);
             }
-            File.Copy(Path.Combine(source, "build-manifest.json"), Path.Combine(staging, "build-manifest.json"));
+            File.WriteAllBytes(Path.Combine(staging, "build-manifest.json"), inspected.Bytes);
             if (Validate(staging) != build) throw new InvalidDataException("复制后的文件校验失败。");
             Directory.Move(staging, destination);
             return destination;

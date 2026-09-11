@@ -50,6 +50,19 @@ public sealed class DeploymentTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(_root, "data", "runner")));
     }
 
+    [Fact]
+    public void BoundedInventorySupportsUtf8BomWithoutChangingBuildIdentity()
+    {
+        var source = MakePackage();
+        var path = Path.Combine(source, "build-manifest.json");
+        File.WriteAllBytes(path, new byte[] { 0xEF, 0xBB, 0xBF }.Concat(File.ReadAllBytes(path)).ToArray());
+        var build = DeploymentPackage.Validate(source);
+        var staged = DeploymentPackage.Stage(source, Path.Combine(_root, "data"));
+        Assert.Equal(build, DeploymentPackage.Validate(staged));
+        File.WriteAllBytes(path, new byte[64 * 1024 + 1]);
+        Assert.Throws<InvalidDataException>(() => DeploymentPackage.Validate(source));
+    }
+
     [Theory]
     [InlineData("../escape")]
     [InlineData("C:/escape")]

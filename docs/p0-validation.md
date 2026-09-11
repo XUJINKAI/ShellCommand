@@ -16,11 +16,12 @@
 
 自动化结果与人工结果必须分别记录。CI 编译/测试成功不等于 Explorer/Surrogate 实机验证成功。
 
-- [ ] Windows CI：托管与 native 构建、故障注入、发布 ZIP 结构与无运行时验证。
+- [x] Windows CI：托管与 native 构建、故障注入、发布 ZIP 结构与无运行时验证（见下方记录）。
 - [ ] 干净 Windows 11（开发者模式关闭）：受信任签名身份包安装、右键调用、卸载。
 - [ ] 安装后删除解压来源，程序与菜单仍正常。
 - [ ] 获取用户卡死现场或等价复现的线程/转储；确认实际 Surrogate 承载位置。
-- [ ] ASan 原生模拟取消竞态及 10000 次请求回收；实际 Explorer 10000 次菜单与 Application Verifier 仍须实机验证。
+- [x] ASan 原生模拟取消竞态及 10000 次请求回收。
+- [ ] 实际 Explorer 10000 次菜单、Application Verifier、端到端性能实机验证。
 - [ ] 签名证书及分发信任方案确定；开发用 Register manifest 不能冒充正式安装。
 
 P1/P2/P3 的 v2 YAML、预览、多选、子菜单、系统菜单事务重写尚未在本阶段声明完成。
@@ -30,3 +31,13 @@ P1/P2/P3 的 v2 YAML、预览、多选、子菜单、系统菜单事务重写尚
 普通 CI 附件为未签名开发包，不应分发为正式版。打包后使用 `packaging/scripts/Sign-Identity.ps1 -Directory <stage> -CertificateThumbprint <thumbprint> -TimestampUrl <RFC3161 URL>` 生成并签名身份包，然后调用 Create-Zip。私钥仅从当前用户证书存储读取，不写入仓库；脚本不安装信任证书、不改变开发者模式。证书 Subject 必须匹配 manifest Publisher。正式证书和目标机器信任必须由发布方提供。
 
 外部目录核验使用 Windows `GetPackagePathByFullName2(..., PackagePathType_EffectiveExternal)`，不查询或修改内部注册数据库。签名身份包的生成和 ExternalLocation 注册依据 [Microsoft 官方说明](https://learn.microsoft.com/en-us/windows/apps/desktop/modernize/grant-identity-to-nonpackaged-apps)。
+
+## 干净 Win11 测试入口
+
+`packaging/scripts/Smoke-Install.ps1 -PackageDirectory <signed-package-directory>` 在无现有 ShellCommand 注册的测试用户中运行：正式安装 → 删除下载副本 → 从 runner 做真实 IPC/注册检查 → 卸载 → 验证配置哨兵仍在。它要求受信任签名包，不自动导入证书。该脚本仍不能代替真实 Explorer 菜单、Surrogate 加载位置与用户卡死场景的人工观察。
+
+## 自动化证据（2026-09-11）
+
+[Windows CI 运行 34563502105](https://github.com/XUJINKAI/ShellCommand/actions/runs/34563502105) 已通过托管测试、原生故障注入、ASan、两入口无运行时单文件发布、native DLL 编译和 ZIP 校验。首次原生测试的 10000 次无 Broker 请求前后句柄数为 123 → 123。这不是 Explorer 中 10000 次实际菜单的测量，也没有据此宣称 p95/p99 达标。
+
+当前环境没有干净 Windows 11 桌面、发布签名证书或用户卡死现场转储。按已确认设计第 12 节，P0 实机放行仍未完成，P1–P4 暂不标记完成。本分支保留旧实现作为待替换基线，没有新增旧配置兼容层；新版 YAML/UI/多选能力尚不可用。
