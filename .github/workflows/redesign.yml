@@ -27,6 +27,7 @@ jobs:
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
           }
       - name: Native fault boundary
+        timeout-minutes: 3
         shell: cmd
         run: >-
           cl /nologo /std:c++20 /EHsc /W4 /WX /MT /utf-8
@@ -34,6 +35,7 @@ jobs:
           /Fe:NativeTests.exe /link shlwapi.lib ole32.lib advapi32.lib shell32.lib uuid.lib
           && NativeTests.exe
       - name: Native cancellation under AddressSanitizer
+        timeout-minutes: 3
         shell: cmd
         run: >-
           cl /nologo /std:c++20 /EHsc /W4 /WX /MT /Zi /fsanitize=address /utf-8

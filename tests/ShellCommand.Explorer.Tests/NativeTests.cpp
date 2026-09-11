@@ -23,14 +23,26 @@ std::vector<std::uint8_t> Reply() {
 enum class Fault { None, Slow, HalfHeader, Fragmented, Disconnect, WrongId, Oversize, WrongVersion };
 void Exchange(Fault fault) {
     const auto name = L"\\\\.\\pipe\\ShellCommand11.Test." + std::to_wstring(GetCurrentProcessId());
-    ScopedHandle pipe(CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX,
+    ScopedHandle pipe(CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
         PIPE_TYPE_BYTE | PIPE_WAIT, 1, 4096, 4096, 0, nullptr));
     Check(pipe.get() != INVALID_HANDLE_VALUE, "create fake broker");
     std::thread server([&] {
-        if (!ConnectNamedPipe(pipe.get(), nullptr) && GetLastError() != ERROR_PIPE_CONNECTED) return;
-        std::uint8_t input[4096]{};
-        DWORD count = 0;
-        if (!ReadFile(pipe.get(), input, sizeof(input), &count, nullptr)) return;
+        ScopedHandle connected(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+        OVERLAPPED connect{};
+        connect.hEvent = connected.get();
+        if (!ConnectNamedPipe(pipe.get(), &connect) && GetLastError() != ERROR_PIPE_CONNECTED) {
+            if (GetLastError() != ERROR_IO_PENDING) return;
+            if (WaitForSingleObject(connected.get(), 1500) != WAIT_OBJECT_0) {
+                CancelIoEx(pipe.get(), &connect);
+                WaitForSingleObject(connected.get(), INFINITE);
+                return;
+            }
+            DWORD count = 0;
+            if (!GetOverlappedResult(pipe.get(), &connect, &count, FALSE)) return;
+        }
+        const auto serverDeadline = GetTickCount64() + 1500;
+        std::vector<std::uint8_t> input;
+        if (!ReadFrame(pipe.get(), kResolveRequest, 1, serverDeadline, input)) return;
         auto reply = Reply();
         if (fault == Fault::Disconnect) { DisconnectNamedPipe(pipe.get()); return; }
         if (fault == Fault::Slow) Sleep(100);
@@ -38,19 +50,20 @@ void Exchange(Fault fault) {
         if (fault == Fault::WrongVersion) reply[4] = 1;
         if (fault == Fault::Oversize) reply[15] = 127;
         if (fault == Fault::HalfHeader) {
-            WriteFile(pipe.get(), reply.data(), 5, &count, nullptr);
+            TimedIo(pipe.get(), true, reply.data(), 5, serverDeadline);
             Sleep(100);
         } else if (fault == Fault::Fragmented) {
-            for (const auto byte : reply) {
-                if (!WriteFile(pipe.get(), &byte, 1, &count, nullptr)) break;
+            for (auto byte : reply) {
+                if (!TimedIo(pipe.get(), true, &byte, 1, serverDeadline)) break;
             }
             Sleep(40);
         } else {
-            WriteFile(pipe.get(), reply.data(), static_cast<DWORD>(reply.size()), &count, nullptr);
+            TimedIo(pipe.get(), true, reply.data(), static_cast<DWORD>(reply.size()), serverDeadline);
             Sleep(40);
         }
         DisconnectNamedPipe(pipe.get());
     });
+    std::cout << "Fault case " << static_cast<int>(fault) << std::endl;
     std::vector<ChildData> children;
     const auto start = GetTickCount64();
     const bool ok = Resolve(L"C:\\Test", children);
@@ -85,6 +98,7 @@ int main() {
             std::vector<ChildData> children;
             Check(!Resolve(L"C:\\Test", children), "missing broker accepted");
             Check(g_pendingRequests <= kMaxPendingRequests, "pending quota exceeded");
+            if (i % 1000 == 0) std::cout << "Request " << i << std::endl;
         }
         for (int i = 0; i < 200 && g_pendingRequests; ++i) Sleep(10);
         GetProcessHandleCount(GetCurrentProcess(), &after);
