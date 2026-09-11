@@ -48,6 +48,9 @@ std::atomic_ulong g_objectCount = 0;
 std::atomic_ulong g_serverLocks = 0;
 std::atomic_ulong g_pendingRequests = 0;
 constexpr unsigned long kMaxPendingRequests = 8;
+#ifdef SHELLCOMMAND_NATIVE_TEST
+std::atomic_ulong g_testCleanupDelayMs = 0;
+#endif
 
 struct ChildData {
     std::wstring title;
@@ -147,6 +150,9 @@ bool TimedIo(HANDLE pipe, bool write, void* data, DWORD length,
             const auto waitMs = now >= deadline ? 0 : static_cast<DWORD>(deadline - now);
             if (WaitForSingleObject(operation->overlapped.hEvent, waitMs) != WAIT_OBJECT_0) {
                 CancelIoEx(pipe, &operation->overlapped);
+#ifdef SHELLCOMMAND_NATIVE_TEST
+                Sleep(g_testCleanupDelayMs.load());
+#endif
                 // Even ERROR_NOT_FOUND from cancellation can race with completion.
                 // The bounded worker retains the pipe and buffers until signaled.
                 WaitForSingleObject(operation->overlapped.hEvent, INFINITE);

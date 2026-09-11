@@ -68,6 +68,14 @@ int main() {
         Check(GetCurrentUserSid() != L"unknown", "SID capture");
         for (const auto fault : {Fault::None, Fault::Fragmented, Fault::Slow, Fault::HalfHeader,
                 Fault::Disconnect, Fault::WrongId, Fault::Oversize, Fault::WrongVersion}) Exchange(fault);
+        // Force cleanup to outlive the caller: request memory and module references
+        // must remain owned until the worker observes cancellation completion.
+        g_testCleanupDelayMs = 300;
+        Exchange(Fault::Slow);
+        Check(g_pendingRequests > 0 && g_objectCount > 0, "abandoned request lost ownership");
+        g_testCleanupDelayMs = 0;
+        Sleep(350);
+        Check(g_pendingRequests == 0, "delayed cleanup leaked");
         CommandEnumerator enumerator({ChildData{}, ChildData{}});
         Check(enumerator.Skip(2) == S_OK && enumerator.Skip(1) == S_FALSE, "COM Skip at end");
         Sleep(100);

@@ -23,12 +23,12 @@ public static class DeploymentPackage
         using var input = File.OpenRead(manifestPath);
         if (input.Length > 64 * 1024) throw new InvalidDataException("发布清单过大。");
         var manifest = JsonSerializer.Deserialize<PackageManifest>(input) ?? throw new InvalidDataException("缺少发布清单。");
-        if (manifest.Protocol != PipeProtocol.Version || manifest.Files.Count is < 7 or > 32)
+        if (manifest.Protocol != PipeProtocol.Version || manifest.Files is null || manifest.Files.Count is < 7 or > 32)
             throw new InvalidDataException("组件协议或发布清单不匹配。");
         var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in manifest.Files)
         {
-            if (string.IsNullOrWhiteSpace(file.Path) || file.Path.Contains('\\') || file.Path.Contains(':') ||
+            if (file is null || string.IsNullOrWhiteSpace(file.Path) || string.IsNullOrWhiteSpace(file.Sha256) || file.Path.Contains('\\') || file.Path.Contains(':') ||
                 file.Path.Split('/').Any(p => p is "" or "." or "..") || !paths.Add(file.Path))
                 throw new InvalidDataException("发布清单包含非法或重复路径。");
             var path = Path.Combine(directory, file.Path);

@@ -68,7 +68,7 @@
         <Button Content="打开全局配置" Padding="12,6" Click="OpenGlobalConfig_Click" />
         <Button Content="打开配置目录" Padding="12,6" Margin="8,0,0,0" Click="OpenConfigFolder_Click" />
       </StackPanel>
-      <TextBlock Grid.Column="1" VerticalAlignment="Center" Foreground="#888888" Text="ShellCommand 11.0.0" />
+      <TextBlock Grid.Column="1" VerticalAlignment="Center" Foreground="#888888" Text="v2 开发预览 · P0" />
     </Grid>
   </Grid>
 </Window>

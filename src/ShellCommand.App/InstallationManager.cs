@@ -94,6 +94,12 @@ public sealed class InstallationManager
             operationLock = new FileStream(RecordPath + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             previous = ReadRecord();
             previousAutoStart = ReadAutoStart();
+            if (previous is null)
+            {
+                var existing = await RunPowerShellAsync("$ErrorActionPreference='Stop'; (Get-AppxPackage -Name 'ShellCommand11').PackageFullName", cancellationToken).ConfigureAwait(false);
+                if (!existing.Success) throw new InvalidOperationException(existing.ErrorOrOutput);
+                if (!string.IsNullOrWhiteSpace(existing.Output)) throw new InvalidOperationException("发现没有本分支安装记录的注册。请先卸载集成，再启用新构建；配置不会迁移或删除。");
+            }
             var target = await Task.Run(() => DeploymentPackage.Stage(_sourceRoot, DeploymentPackage.DataRoot), cancellationToken).ConfigureAwait(false);
             var next = new InstalledBuild(target, developerRegistration);
             if (!developerRegistration && !File.Exists(Path.Combine(target, "ShellCommand.Identity.msix")))
@@ -119,6 +125,7 @@ public sealed class InstallationManager
                 try
                 {
                     StopInstalledBroker();
+                    WriteAutoStart(previousAutoStart);
                     if (previous is null)
                     {
                         await UnregisterAsync(CancellationToken.None).ConfigureAwait(false);
@@ -131,7 +138,6 @@ public sealed class InstallationManager
                         WriteRecord(previous);
                         await EnsureBrokerAsync(previous.Root, CancellationToken.None).ConfigureAwait(false);
                     }
-                    WriteAutoStart(previousAutoStart);
                     message += " 已恢复先前安装状态。";
                 }
                 catch (Exception rollback) { message += " 恢复失败：" + rollback.Message + "；可运行 --disable-integration 注销。"; }

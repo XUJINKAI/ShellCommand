@@ -33,6 +33,13 @@ jobs:
           /DUNICODE /D_UNICODE /DNOMINMAX tests\ShellCommand.Explorer.Tests\NativeTests.cpp
           /Fe:NativeTests.exe /link shlwapi.lib ole32.lib advapi32.lib shell32.lib uuid.lib
           && NativeTests.exe
+      - name: Native cancellation under AddressSanitizer
+        shell: cmd
+        run: >-
+          cl /nologo /std:c++20 /EHsc /W4 /WX /MT /Zi /fsanitize=address /utf-8
+          /DUNICODE /D_UNICODE /DNOMINMAX tests\ShellCommand.Explorer.Tests\NativeTests.cpp
+          /Fe:NativeTestsAsan.exe /link shlwapi.lib ole32.lib advapi32.lib shell32.lib uuid.lib
+          && NativeTestsAsan.exe
       - name: Publish application
         run: dotnet publish src/ShellCommand.App -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o artifacts/package
       - name: Publish broker

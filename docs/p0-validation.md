@@ -20,7 +20,13 @@
 - [ ] 干净 Windows 11（开发者模式关闭）：受信任签名身份包安装、右键调用、卸载。
 - [ ] 安装后删除解压来源，程序与菜单仍正常。
 - [ ] 获取用户卡死现场或等价复现的线程/转储；确认实际 Surrogate 承载位置。
-- [ ] Application Verifier / ASan 取消竞态、10000 次菜单、句柄/内存无持续增长。
+- [ ] ASan 原生模拟取消竞态及 10000 次请求回收；实际 Explorer 10000 次菜单与 Application Verifier 仍须实机验证。
 - [ ] 签名证书及分发信任方案确定；开发用 Register manifest 不能冒充正式安装。
 
 P1/P2/P3 的 v2 YAML、预览、多选、子菜单、系统菜单事务重写尚未在本阶段声明完成。
+
+## 签名构建
+
+普通 CI 附件为未签名开发包，不应分发为正式版。打包后使用 `packaging/scripts/Sign-Identity.ps1 -Directory <stage> -CertificateThumbprint <thumbprint> -TimestampUrl <RFC3161 URL>` 生成并签名身份包，然后调用 Create-Zip。私钥仅从当前用户证书存储读取，不写入仓库；脚本不安装信任证书、不改变开发者模式。证书 Subject 必须匹配 manifest Publisher。正式证书和目标机器信任必须由发布方提供。
+
+外部目录核验使用 Windows `GetPackagePathByFullName2(..., PackagePathType_EffectiveExternal)`，不查询或修改内部注册数据库。签名身份包的生成和 ExternalLocation 注册依据 [Microsoft 官方说明](https://learn.microsoft.com/en-us/windows/apps/desktop/modernize/grant-identity-to-nonpackaged-apps)。
