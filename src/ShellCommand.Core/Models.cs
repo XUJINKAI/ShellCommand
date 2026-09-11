@@ -26,7 +26,7 @@ public sealed record MenuDefinition(string Id, string Title, string SourcePath, 
 public sealed record MenuConfig(IReadOnlyList<MenuDefinition> Menu, IReadOnlyList<string> Includes);
 public sealed record SourceSnapshot(MenuConfig? Config, IReadOnlyList<Diagnostic> Diagnostics, bool Missing = false);
 public sealed record PreparedSnapshot(SourceSnapshot Global, SourceSnapshot Local, IReadOnlyList<string>? Facts,
-    IReadOnlyList<string> Dependencies, DateTimeOffset PreparedAt);
+    IReadOnlyList<string> Dependencies, DateTimeOffset PreparedAt, IReadOnlyList<string>? WatchPaths = null);
 public sealed record LaunchAction(string Kind, string? Exe = null, IReadOnlyList<string>? Args = null,
     string? Cwd = null, IReadOnlyDictionary<string, string>? Env = null, bool Admin = false,
     string Output = "normal", string? Text = null, string? Shell = null);

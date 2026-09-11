@@ -109,8 +109,10 @@ public sealed class ContextMenuScanner
         {
             using var handler = handlers.OpenSubKey(name);
             var clsid = handler?.GetValue(null) as string;
+            using var server = clsid is null ? null : baseKey.OpenSubKey("CLSID\\" + clsid + "\\InprocServer32");
+            var module = server?.GetValue(null) as string;
             var isBlocked = clsid is not null && blocked?.GetValue(clsid) is not null;
-            result.Add(new MenuEntry($"{hive}:{path}:{name}", name, MenuEntryType.LegacyCom, scope, isBlocked ? MenuEntryState.Blocked : MenuEntryState.Enabled, hive, $"{path}\\{name}", clsid, null, Guid.TryParse(clsid, out _)));
+            result.Add(new MenuEntry($"{hive}:{path}:{name}", name, MenuEntryType.LegacyCom, scope, isBlocked ? MenuEntryState.Blocked : MenuEntryState.Enabled, hive, $"{path}\\{name}", clsid, module, Guid.TryParse(clsid, out _)));
         }
     }
 

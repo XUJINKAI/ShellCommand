@@ -10,7 +10,8 @@ public static class Program
         {
             try
             {
-                var input = await SnapshotRuntime.ReadBoundedAsync(Console.In, 2 * 1024 * 1024, CancellationToken.None);
+                using var inputReader = new StreamReader(Console.OpenStandardInput(), new System.Text.UTF8Encoding(false, true));
+                var input = await SnapshotRuntime.ReadBoundedAsync(inputReader, 2 * 1024 * 1024, CancellationToken.None);
                 var request = JsonSerializer.Deserialize<PrepareRequest>(input) ?? throw new InvalidDataException("缺少准备请求。");
                 Console.Write(JsonSerializer.Serialize(Preparation.Prepare(request))); return 0;
             }

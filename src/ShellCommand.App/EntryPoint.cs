@@ -34,7 +34,8 @@ public static class EntryPoint
             ExecutionRequest request;
             try
             {
-                var json = SnapshotRuntime.ReadBoundedAsync(Console.In, 2 * 1024 * 1024, CancellationToken.None).GetAwaiter().GetResult();
+                using var inputReader = new System.IO.StreamReader(Console.OpenStandardInput(), new System.Text.UTF8Encoding(false, true));
+                var json = SnapshotRuntime.ReadBoundedAsync(inputReader, 2 * 1024 * 1024, CancellationToken.None).GetAwaiter().GetResult();
                 request = JsonSerializer.Deserialize<ExecutionRequest>(json) ?? throw new InvalidOperationException("执行请求为空。");
             }
             catch (Exception ex) { Console.Error.WriteLine(ex.Message); return 1; }

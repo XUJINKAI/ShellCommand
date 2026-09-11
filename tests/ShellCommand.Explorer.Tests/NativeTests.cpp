@@ -77,8 +77,28 @@ void Exchange(Fault fault) {
     else Check(!ok, "malformed/late reply accepted");
 }
 
+void NestedMenus() {
+    const auto frame = Reply();
+    std::vector<std::uint8_t> nodes(frame.begin() + 17, frame.end()); // count + two actions
+    for (int level = 0; level < 2; ++level) {
+        std::vector<std::uint8_t> group{1, 0, 2, 1, 0, 0};
+        group.insert(group.end(), 16, 0);
+        AppendUInt32(group, 1); group.push_back('G'); AppendUInt32(group, 0);
+        group.insert(group.end(), nodes.begin(), nodes.end());
+        nodes = std::move(group);
+    }
+    nodes.insert(nodes.begin(), 0);
+    std::vector<ChildData> children;
+    Check(ParseResolveResponse(nodes, children), "two-level submenu rejected");
+    Check(children.size() == 1 && children[0].children.size() == 1 &&
+        children[0].children[0].children.size() == 2, "submenu hierarchy lost");
+    nodes.back() = 1;
+    Check(!ParseResolveResponse(nodes, children), "malformed leaf child count accepted");
+}
+
 int main() {
     try {
+        NestedMenus();
         Check(GetCurrentUserSid() != L"unknown", "SID capture");
         // ASan's first CreateThread can take longer than the production deadline.
         // Check that cold requests fail closed, then measure protocol behavior warm.

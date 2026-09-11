@@ -8,7 +8,7 @@ namespace ShellCommand.Broker;
 
 public sealed class SnapshotRuntime : IDisposable
 {
-    private sealed record Entry(PreparedSnapshot Snapshot, DateTimeOffset Used);
+    private sealed record Entry(PreparedSnapshot Snapshot, DateTimeOffset Used, int Bytes);
     private readonly object _gate = new();
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, FileSystemWatcher> _watchers = new(StringComparer.OrdinalIgnoreCase);
@@ -68,14 +68,16 @@ public sealed class SnapshotRuntime : IDisposable
             {
                 try
                 {
+                    await Task.Delay(100, _stop.Token).ConfigureAwait(false); // one-shot coalescing of editor/file event bursts
                     var snapshot = await PrepareAsync(new(key.Length == 0 ? null : key, _dataDirectory, _appDirectory), _brokerPath, _stop.Token).ConfigureAwait(false);
+                    var bytes = checked(JsonSerializer.Serialize(snapshot).Length * 4);
                     lock (_gate)
                     {
                         _global = snapshot.Global;
-                        _entries[key] = new(snapshot, DateTimeOffset.UtcNow);
-                        while (_entries.Count > 128) _entries.Remove(_entries.MinBy(p => p.Value.Used).Key);
+                        _entries[key] = new(snapshot, DateTimeOffset.UtcNow, bytes);
+                        while (_entries.Count > 128 || _entries.Values.Sum(e => e.Bytes) > 32 * 1024 * 1024) _entries.Remove(_entries.MinBy(p => p.Value.Used).Key);
                     }
-                    Watch(snapshot.Dependencies, key);
+                    Watch(snapshot.WatchPaths ?? [], key);
                 }
                 catch (Exception ex) when (ex is IOException or InvalidOperationException or OperationCanceledException or System.ComponentModel.Win32Exception or JsonException) { }
                 finally { _pending.TryRemove(key, out _); }
@@ -125,20 +127,36 @@ public sealed class SnapshotRuntime : IDisposable
         lock (_gate)
         {
             if (_stop.IsCancellationRequested) return;
-            foreach (var path in dependencies)
+            foreach (var path in dependencies.Select(p => Path.GetDirectoryName(p)!).Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                if (!path.StartsWith(Path.Combine(_dataDirectory, "config") + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || _watchers.ContainsKey(path) || _watchers.Count >= 32) continue;
+                if (_watchers.ContainsKey(path)) continue;
+                if (_watchers.Count >= 32)
+                {
+                    var oldest = _watchers.Keys.FirstOrDefault(p => !p.StartsWith(Path.Combine(_dataDirectory, "config"), StringComparison.OrdinalIgnoreCase));
+                    if (oldest is null) continue;
+                    _watchers.Remove(oldest, out var expired); expired!.Dispose();
+                }
                 try
                 {
-                    var watcher = new FileSystemWatcher(Path.GetDirectoryName(path)!, Path.GetFileName(path)) { NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size };
-                    FileSystemEventHandler changed = (_, _) => Refresh(key);
+                    var watcher = new FileSystemWatcher(path, "*") { NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size };
+                    FileSystemEventHandler changed = (_, _) => RefreshAffected(path, key);
                     watcher.Changed += changed; watcher.Created += changed; watcher.Deleted += changed;
-                    watcher.Renamed += (_, _) => Refresh(key);
+                    watcher.Renamed += (_, _) => RefreshAffected(path, key);
+                    watcher.Error += (_, _) => RefreshAffected(path, key);
                     watcher.EnableRaisingEvents = true; _watchers.Add(path, watcher);
                 }
                 catch (Exception ex) when (ex is IOException or ArgumentException or UnauthorizedAccessException) { }
             }
         }
+    }
+    private void RefreshAffected(string directory, string fallback)
+    {
+        string[] keys;
+        lock (_gate)
+            keys = _entries.Where(pair => pair.Key.Equals(directory, StringComparison.OrdinalIgnoreCase) ||
+                pair.Value.Snapshot.Dependencies.Any(p => string.Equals(Path.GetDirectoryName(p), directory, StringComparison.OrdinalIgnoreCase)))
+                .Select(pair => pair.Key).Append(fallback).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        foreach (var key in keys) Refresh(key);
     }
     public void Dispose()
     {

@@ -28,7 +28,33 @@ public static class Preparation
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
-        return new(global, local, facts, dependencies.ToArray(), DateTimeOffset.UtcNow);
+        var watchPaths = dependencies.Where(path =>
+        {
+            if (!OperatingSystem.IsWindows()) return false;
+            try { return !path.StartsWith(@"\\", StringComparison.Ordinal) && new DriveInfo(Path.GetPathRoot(path)!).DriveType == DriveType.Fixed; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { return false; }
+        }).ToArray();
+        if (request.EditorPath is null)
+        {
+            TrimCache(Path.Combine(request.DataDirectory, "cache", "sources"), "*.json", 128, 32 * 1024 * 1024);
+            TrimCache(Path.Combine(request.DataDirectory, "cache", "icons"), "*.ico", 2048, 16 * 1024 * 1024);
+        }
+        return new(global, local, facts, dependencies.ToArray(), DateTimeOffset.UtcNow, watchPaths);
+    }
+    private static void TrimCache(string folder, string pattern, int maxFiles, long maxBytes)
+    {
+        try
+        {
+            if (!Directory.Exists(folder)) return;
+            var files = new DirectoryInfo(folder).EnumerateFiles(pattern).Take(4096).OrderByDescending(f => f.LastWriteTimeUtc).ToArray();
+            long bytes = 0; var count = 0;
+            foreach (var file in files)
+            {
+                bytes += file.Length;
+                if (++count > maxFiles || bytes > maxBytes) try { file.Delete(); } catch (IOException) { }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
     private static SourceSnapshot LoadSource(string root, PrepareRequest request, HashSet<string> dependencies)
     {
@@ -38,7 +64,7 @@ public static class Preparation
         MenuConfig? good = null;
         try
         {
-            saved = JsonSerializer.Deserialize<PersistedSource>(ReadText(cache, 2 * 1024 * 1024));
+            saved = JsonSerializer.Deserialize<PersistedSource>(ReadText(cache, 8 * 1024 * 1024));
             if (saved?.Version == 2) { if (saved.Texts.Count != 0) good = BuildTree(root, saved.Texts, dependencies); }
             else saved = null;
         }

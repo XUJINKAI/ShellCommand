@@ -29,7 +29,7 @@ try {
     $expected = @('', 'space path', "one's file", '中文 & %PATH% ! ^ | < >', 'quote"inside', 'C:\ends with slash\')
     Invoke-Plan @(@{ Kind='run'; Exe=$probePath; Args=$expected; Cwd=$root; Output='hidden'; Env=@{ SC_PROBE_DEST=$destination; SC_PROBE_VALUE='literal & 中文' } })
     $actual = Get-Content $destination -Raw | ConvertFrom-Json
-    if (($actual.Args | ConvertTo-Json -Compress) -cne ($expected | ConvertTo-Json -Compress)) { throw 'Arguments were changed' }
+    if (($actual.Args | ConvertTo-Json -Compress) -cne ($expected | ConvertTo-Json -Compress)) { throw ("Arguments were changed. Expected: " + ($expected | ConvertTo-Json -Compress) + " Actual: " + ($actual.Args | ConvertTo-Json -Compress)) }
     if ($actual.Cwd -ne $root -or $actual.Value -ne 'literal & 中文') { throw 'Cwd or environment changed' }
     $literal = Join-Path $root 'script.txt'
     $scriptText = '[IO.File]::WriteAllText($env:SC_PROBE_DEST, ''${directory}'')'

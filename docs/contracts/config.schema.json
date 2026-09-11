@@ -1,97 +1,436 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://xujinkai.net/schemas/shellcommand11-config.schema.json",
-  "title": "ShellCommand 11 Config Core Schema",
-  "description": "Machine-readable core field schema. YAML-specific restrictions such as anchors/aliases are enforced by the YAML adapter and are not fully expressible here.",
-  "$defs": {
-    "command": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "Name": {
-          "type": "string",
-          "maxLength": 4096
-        },
-        "Command": {
-          "type": "string",
-          "maxLength": 4096
-        },
-        "Match": {
-          "type": "string",
-          "maxLength": 4096
-        },
-        "RunAsAdmin": {
-          "type": "boolean",
-          "default": false
-        },
-        "Icon": {
-          "type": "string",
-          "maxLength": 4096
-        }
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": 2
+    },
+    "include": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
       },
-      "anyOf": [
+      "maxItems": 8
+    },
+    "menu": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/node"
+      },
+      "maxItems": 100
+    }
+  },
+  "required": [
+    "version",
+    "menu"
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://xujinkai.net/schemas/shellcommand-v2.schema.json",
+  "title": "ShellCommand YAML v2",
+  "description": "Only v2. Runtime additionally checks duplicate IDs, two group levels, source-tree limits, YAML restrictions and variable applicability.",
+  "$defs": {
+    "node": {
+      "oneOf": [
         {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "separator": {
+              "const": true
+            }
+          },
           "required": [
-            "Command"
+            "separator"
           ]
         },
         {
-          "required": [
-            "Name"
-          ],
+          "type": "object",
+          "additionalProperties": false,
           "properties": {
-            "Name": {
-              "const": "---"
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "enabled": {
+              "const": false
             }
-          }
+          },
+          "required": [
+            "id",
+            "enabled"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "when": {
+              "$ref": "#/$defs/condition"
+            },
+            "icon": {
+              "oneOf": [
+                {
+                  "enum": [
+                    "terminal",
+                    "folder",
+                    "file",
+                    "copy",
+                    "settings",
+                    "code",
+                    "git"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "file": {
+                      "type": "string",
+                      "maxLength": 32768
+                    },
+                    "index": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 65535
+                    }
+                  },
+                  "required": [
+                    "file"
+                  ]
+                }
+              ]
+            },
+            "run": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "exe": {
+                  "type": "string",
+                  "maxLength": 32768
+                },
+                "args": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 32768
+                  },
+                  "maxItems": 256
+                },
+                "cwd": {
+                  "type": "string",
+                  "maxLength": 32768
+                },
+                "env": {
+                  "type": "object",
+                  "maxProperties": 64,
+                  "additionalProperties": {
+                    "type": "string",
+                    "maxLength": 32768
+                  }
+                },
+                "admin": {
+                  "type": "boolean"
+                },
+                "output": {
+                  "enum": [
+                    "normal",
+                    "hidden",
+                    "window"
+                  ]
+                },
+                "mode": {
+                  "enum": [
+                    "once",
+                    "each"
+                  ]
+                }
+              },
+              "required": [
+                "exe"
+              ],
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "admin": {
+                        "const": true
+                      }
+                    },
+                    "required": [
+                      "admin"
+                    ]
+                  },
+                  "then": {
+                    "not": {
+                      "required": [
+                        "env"
+                      ]
+                    },
+                    "properties": {
+                      "output": {
+                        "const": "normal"
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "script": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "shell": {
+                  "enum": [
+                    "powershell",
+                    "pwsh",
+                    "cmd"
+                  ]
+                },
+                "text": {
+                  "type": "string",
+                  "maxLength": 32768
+                },
+                "cwd": {
+                  "type": "string",
+                  "maxLength": 32768
+                },
+                "env": {
+                  "type": "object",
+                  "maxProperties": 64,
+                  "additionalProperties": {
+                    "type": "string",
+                    "maxLength": 32768
+                  }
+                },
+                "output": {
+                  "enum": [
+                    "normal",
+                    "hidden",
+                    "window"
+                  ]
+                }
+              },
+              "required": [
+                "text"
+              ]
+            },
+            "open": {
+              "type": "string",
+              "maxLength": 32768
+            },
+            "copy": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "maxLength": 32768
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "values": {
+                      "const": "${selection.paths}"
+                    },
+                    "separator": {
+                      "type": "string",
+                      "maxLength": 32768
+                    }
+                  },
+                  "required": [
+                    "values"
+                  ]
+                }
+              ]
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/node"
+              },
+              "maxItems": 100
+            }
+          },
+          "required": [
+            "id",
+            "title"
+          ],
+          "oneOf": [
+            {
+              "required": [
+                "run"
+              ]
+            },
+            {
+              "required": [
+                "script"
+              ]
+            },
+            {
+              "required": [
+                "open"
+              ]
+            },
+            {
+              "required": [
+                "copy"
+              ]
+            },
+            {
+              "required": [
+                "items"
+              ]
+            }
+          ]
         }
       ]
     },
-    "functions": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "CopyPath": {
-          "type": "boolean",
-          "default": false
-        },
-        "EditGlobal": {
-          "type": "boolean",
-          "default": false
-        }
-      }
-    },
-    "directoryConfig": {
-      "type": "array",
-      "maxItems": 100,
-      "items": {
-        "$ref": "#/$defs/command"
-      }
-    },
-    "globalConfig": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "GlobalCommands": {
-          "type": "array",
-          "maxItems": 100,
-          "items": {
-            "$ref": "#/$defs/command"
+    "condition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "all": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/condition"
+              },
+              "maxItems": 64,
+              "minItems": 1
+            }
           },
-          "default": []
+          "required": [
+            "all"
+          ]
         },
-        "Functions": {
-          "$ref": "#/$defs/functions"
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "any": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/condition"
+              },
+              "maxItems": 64,
+              "minItems": 1
+            }
+          },
+          "required": [
+            "any"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "not": {
+              "$ref": "#/$defs/condition"
+            }
+          },
+          "required": [
+            "not"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "exists": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[^/\\\\:]+$"
+            }
+          },
+          "required": [
+            "exists"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "context": {
+              "enum": [
+                "background",
+                "selection"
+              ]
+            }
+          },
+          "required": [
+            "context"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "selection": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "types": {
+                  "type": "array",
+                  "items": {
+                    "enum": [
+                      "file",
+                      "folder"
+                    ]
+                  },
+                  "maxItems": 256,
+                  "minItems": 1
+                },
+                "count": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "min": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 256
+                    },
+                    "max": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 256
+                    }
+                  },
+                  "required": []
+                },
+                "extensions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^\\.[^/\\\\]+$"
+                  },
+                  "maxItems": 256,
+                  "minItems": 1
+                }
+              },
+              "required": []
+            }
+          },
+          "required": [
+            "selection"
+          ]
         }
-      }
+      ]
     }
-  },
-  "oneOf": [
-    {
-      "$ref": "#/$defs/directoryConfig"
-    },
-    {
-      "$ref": "#/$defs/globalConfig"
-    }
-  ]
+  }
 }
