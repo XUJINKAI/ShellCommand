@@ -5,6 +5,9 @@
 #include <shlwapi.h>
 #include <sddl.h>
 #include <shellapi.h>
+#include <shlobj.h>
+#include <shlguid.h>
+#include <servprov.h>
 
 #include <algorithm>
 #include <atomic>
@@ -27,14 +30,14 @@ extern "C" IMAGE_DOS_HEADER __ImageBase;
 namespace {
 
 // 协议常量必须与 docs/contracts/broker-ipc.md 保持一致。
-constexpr std::uint16_t kProtocolVersion = 2;
+constexpr std::uint16_t kProtocolVersion = 3;
 constexpr std::uint16_t kResolveRequest = 10;
 constexpr std::uint16_t kResolveResponse = 11;
 constexpr std::uint16_t kInvokeRequest = 20;
 constexpr std::uint16_t kInvokeResponse = 21;
 constexpr std::uint32_t kMaxPayloadBytes = 256 * 1024;
 constexpr std::uint32_t kMaxStringBytes = 32 * 1024;
-constexpr std::uint16_t kMaxMenuItems = 100;
+constexpr std::uint16_t kMaxMenuItems = 128;
 constexpr ULONGLONG kIpcDeadlineMs = 30;
 
 constexpr GUID kClsid = {
@@ -58,7 +61,9 @@ struct ChildData {
     std::uint8_t token[16]{};
     bool isFallback = false;
     bool isSeparator = false;
+    std::vector<ChildData> children;
 };
+struct SelectionData { std::wstring path; bool folder = false; };
 
 class ScopedHandle final {
 public:
@@ -338,65 +343,42 @@ bool IsZeroToken(const std::uint8_t* token) noexcept {
     return true;
 }
 
-bool ParseResolveResponse(const std::vector<std::uint8_t>& payload,
-                          std::vector<ChildData>& children) {
-    // status(uint8) + itemCount(uint16) 是 ResolveMenuResponse 的固定前缀。
-    if (payload.size() < 3) {
-        return false;
-    }
-
-    const std::uint8_t status = payload[0];
-    if (status != 0 && status != 1) { // OK / NO_COMMANDS
-        return false;
-    }
-
-    const std::uint16_t itemCount = ReadUInt16(payload.data() + 1);
-    if (itemCount > kMaxMenuItems) {
-        return false;
-    }
-
-    children.clear();
-    children.reserve(itemCount);
-    std::size_t position = 3;
-
-    for (std::uint16_t index = 0; index < itemCount; ++index) {
-        // kind(1) + flags(1) + reserved(2) + token(16)
-        if (!HasBytes(position, 20, payload.size())) {
-            return false;
-        }
-
+bool ReadMenuItems(const std::vector<std::uint8_t>& payload, std::size_t& position,
+                   std::vector<ChildData>& children, unsigned int depth, unsigned int& total) {
+    if (depth > 3 || !HasBytes(position, 2, payload.size())) return false;
+    const auto count = ReadUInt16(payload.data() + position); position += 2;
+    total += count;
+    if (total > kMaxMenuItems) return false;
+    children.clear(); children.reserve(count);
+    for (std::uint16_t i = 0; i < count; ++i) {
+        if (!HasBytes(position, 20, payload.size())) return false;
         ChildData child{};
-        const std::uint8_t kind = payload[position++];
-        const std::uint8_t flags = payload[position++];
-        const std::uint16_t reserved = ReadUInt16(payload.data() + position);
-        position += 2;
-
-        std::memcpy(child.token, payload.data() + position, sizeof(child.token));
-        position += sizeof(child.token);
-
-        if (kind > 1 || (flags & 0xFE) != 0 || reserved != 0 ||
-            !ReadUtf8String(payload, position, child.title) ||
-            !ReadUtf8String(payload, position, child.icon)) {
-            return false;
-        }
-
+        const auto kind = payload[position++]; const auto flags = payload[position++];
+        const auto reserved = ReadUInt16(payload.data() + position); position += 2;
+        std::memcpy(child.token, payload.data() + position, 16); position += 16;
+        if (kind > 2 || flags != (kind == 1 ? 0 : 1) || reserved != 0 ||
+            !ReadUtf8String(payload, position, child.title) || !ReadUtf8String(payload, position, child.icon) ||
+            !ReadMenuItems(payload, position, child.children, depth + 1, total)) return false;
         child.isSeparator = kind == 1;
-        if (child.isSeparator) {
-            if (!child.title.empty() || !child.icon.empty() || !IsZeroToken(child.token)) {
-                return false;
-            }
-        } else if (IsZeroToken(child.token)) {
-            // Action 必须携带 Broker 签发的 opaque token，不能按索引猜命令。
-            return false;
-        }
-
+        if (kind == 1 && (!child.title.empty() || !child.icon.empty() || !IsZeroToken(child.token))) return false;
+        if (kind == 0 && IsZeroToken(child.token)) return false;
+        if (kind == 2 && (!IsZeroToken(child.token) || child.children.empty())) return false;
+        if (kind != 2 && !child.children.empty()) return false;
+        if (kind != 1 && child.title.empty()) return false;
+        // User icons are prepared .ico files. Never pass arbitrary UNC/DLL references to the shell.
+        if (!child.icon.empty() && (child.icon.starts_with(L"\\\\") ||
+            child.icon.size() < 4 || _wcsicmp(child.icon.c_str() + child.icon.size() - 4, L".ico") != 0)) return false;
         children.push_back(std::move(child));
     }
-
-    return position == payload.size();
+    return true;
+}
+bool ParseResolveResponse(const std::vector<std::uint8_t>& payload, std::vector<ChildData>& children) {
+    if (payload.size() < 3 || payload[0] > 1) return false;
+    std::size_t position = 1; unsigned int total = 0;
+    return ReadMenuItems(payload, position, children, 0, total) && position == payload.size();
 }
 
-bool ResolveCore(const std::wstring& directory, std::vector<ChildData>& children, ULONGLONG deadline) {
+bool ResolveCore(const std::wstring& directory, std::vector<ChildData>& children, ULONGLONG deadline, const std::vector<SelectionData>& selection) {
     ScopedHandle pipe(OpenBrokerPipe());
     if (pipe.get() == INVALID_HANDLE_VALUE) {
         return false;
@@ -412,6 +394,17 @@ bool ResolveCore(const std::wstring& directory, std::vector<ChildData>& children
     requestPayload.reserve(sizeof(std::uint32_t) + encodedPath.size());
     AppendUInt32(requestPayload, static_cast<std::uint32_t>(encodedPath.size()));
     requestPayload.insert(requestPayload.end(), encodedPath.begin(), encodedPath.end());
+    if (selection.size() > 256) return false;
+    AppendUInt16(requestPayload, static_cast<std::uint16_t>(selection.size()));
+    for (const auto& item : selection) {
+        std::vector<std::uint8_t> encoded;
+        if (!ToUtf8(item.path, encoded)) return false;
+        requestPayload.push_back(item.folder ? 1 : 0);
+        AppendUInt32(requestPayload, static_cast<std::uint32_t>(encoded.size()));
+        requestPayload.insert(requestPayload.end(), encoded.begin(), encoded.end());
+        if (requestPayload.size() > kMaxPayloadBytes) return false;
+    }
+
 
     const std::vector<std::uint8_t> frame =
         BuildFrame(kResolveRequest, 1, requestPayload);
@@ -462,6 +455,7 @@ bool InvokeTokenCore(const std::uint8_t token[16], ULONGLONG deadline) {
 struct Request final {
     ScopedHandle ready{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
     std::wstring directory;
+    std::vector<SelectionData> selection;
     std::vector<ChildData> children;
     std::uint8_t token[16]{};
     ULONGLONG deadline = 0;
@@ -481,7 +475,7 @@ DWORD WINAPI RequestWorker(void* context) noexcept {
         if (GetTickCount64() < request->deadline) {
             request->success = request->invoke
                 ? InvokeTokenCore(request->token, request->deadline)
-                : ResolveCore(request->directory, request->children, request->deadline);
+                : ResolveCore(request->directory, request->children, request->deadline, request->selection);
         }
     } catch (...) { request->success = false; }
     request->completed.store(true, std::memory_order_release);
@@ -517,13 +511,14 @@ bool RunRequest(const std::shared_ptr<Request>& request) noexcept {
         && GetTickCount64() < request->deadline;
 }
 
-bool Resolve(const std::wstring& directory, std::vector<ChildData>& children) noexcept {
+bool Resolve(const std::wstring& directory, std::vector<ChildData>& children, const std::vector<SelectionData>& selection = {}) noexcept {
     const auto deadline = GetTickCount64() + kIpcDeadlineMs;
     try {
         if (directory.size() > kMaxStringBytes) return false;
         auto request = std::make_shared<Request>();
         request->deadline = deadline;
         request->directory = directory;
+        request->selection = selection;
         if (!RunRequest(request)) return false;
         children = std::move(request->children);
         return true;
@@ -541,40 +536,69 @@ bool InvokeToken(const std::uint8_t token[16]) noexcept {
     } catch (...) { return false; }
 }
 
-bool ExtractFilesystemPath(IShellItemArray* items, std::wstring& path) noexcept {
-    try {
-        if (items == nullptr) {
-            return false;
-        }
-
-        DWORD itemCount = 0;
-        if (FAILED(items->GetCount(&itemCount)) || itemCount == 0) {
-            return false;
-        }
-
-        IShellItem* item = nullptr;
-        if (FAILED(items->GetItemAt(0, &item)) || item == nullptr) {
-            return false;
-        }
-
-        PWSTR displayName = nullptr;
-        const HRESULT hr = item->GetDisplayName(SIGDN_FILESYSPATH, &displayName);
-        item->Release();
-        if (FAILED(hr) || displayName == nullptr) {
-            return false;
-        }
-
-        std::wstring extracted(displayName);
-        CoTaskMemFree(displayName);
-        if (extracted.empty()) {
-            return false;
-        }
-
-        path.swap(extracted);
-        return true;
-    } catch (...) {
-        return false;
+template<class T> class ComPtr final {
+public:
+    T* value = nullptr;
+    ~ComPtr() { if (value) value->Release(); }
+    T* operator->() const noexcept { return value; }
+};
+bool ItemPath(IShellItem* item, std::wstring& path) {
+    PWSTR text = nullptr;
+    if (FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &text)) || !text) return false;
+    try { path = text; } catch (...) { CoTaskMemFree(text); throw; }
+    CoTaskMemFree(text);
+    return !path.empty() && path.size() <= kMaxStringBytes;
+}
+bool ViewDirectory(IUnknown* site, std::wstring& path) {
+    if (!site) return false;
+    ComPtr<IServiceProvider> provider;
+    if (FAILED(site->QueryInterface(IID_PPV_ARGS(&provider.value)))) return false;
+    ComPtr<IFolderView> view;
+    if (FAILED(provider->QueryService(SID_SFolderView, IID_PPV_ARGS(&view.value)))) {
+        ComPtr<IShellBrowser> browser;
+        ComPtr<IShellView> shellView;
+        if (FAILED(provider->QueryService(SID_STopLevelBrowser, IID_PPV_ARGS(&browser.value))) ||
+            FAILED(browser->QueryActiveShellView(&shellView.value)) ||
+            FAILED(shellView->QueryInterface(IID_PPV_ARGS(&view.value)))) return false;
     }
+    ComPtr<IPersistFolder2> folder;
+    if (FAILED(view->GetFolder(IID_PPV_ARGS(&folder.value)))) return false;
+    PIDLIST_ABSOLUTE pidl = nullptr;
+    if (FAILED(folder->GetCurFolder(&pidl))) return false;
+    ComPtr<IShellItem> item;
+    const auto hr = SHCreateItemFromIDList(pidl, IID_PPV_ARGS(&item.value));
+    CoTaskMemFree(pidl);
+    return SUCCEEDED(hr) && ItemPath(item.value, path);
+}
+bool CaptureContext(IUnknown* site, IShellItemArray* items, std::wstring& directory, std::vector<SelectionData>& selection) noexcept {
+    try {
+        directory.clear(); selection.clear();
+        DWORD count = 0;
+        if (items && FAILED(items->GetCount(&count))) return false;
+        if (count == 0) return ViewDirectory(site, directory);
+        if (count > 256) return false;
+        for (DWORD i = 0; i < count; ++i) {
+            ComPtr<IShellItem> item;
+            if (FAILED(items->GetItemAt(i, &item.value))) return false;
+            SFGAOF attributes = 0;
+            if (FAILED(item->GetAttributes(SFGAO_FILESYSTEM | SFGAO_FOLDER, &attributes)) || !(attributes & SFGAO_FILESYSTEM)) return false;
+            SelectionData selected;
+            if (!ItemPath(item.value, selected.path)) return false;
+            selected.folder = (attributes & SFGAO_FOLDER) != 0;
+            selection.push_back(std::move(selected));
+        }
+        if (selection.size() == 1 && selection[0].folder) { directory = selection[0].path; return true; }
+        auto parent = [](const std::wstring& path) {
+            const auto slash = path.find_last_of(L"\\/");
+            if (slash == std::wstring::npos) return std::wstring{};
+            return path.substr(0, slash == 2 && path[1] == L':' ? 3 : slash);
+        };
+        directory = parent(selection[0].path);
+        for (const auto& item : selection)
+            if (_wcsicmp(directory.c_str(), parent(item.path).c_str()) != 0) { directory.clear(); break; }
+        // Search results may span directories: keep selection, leave directory absent.
+        return true;
+    } catch (...) { directory.clear(); selection.clear(); return false; }
 }
 
 HRESULT CopyStringToTaskMemory(const wchar_t* value, LPWSTR* output) noexcept {
@@ -604,7 +628,7 @@ HRESULT CopyStringToTaskMemory(const wchar_t* value, LPWSTR* output) noexcept {
 
 class CommandEnumerator;
 
-class ExplorerCommand final : public IExplorerCommand {
+class ExplorerCommand final : public IExplorerCommand, public IObjectWithSite {
 public:
     explicit ExplorerCommand(bool root) noexcept : isRoot_(root) {
         ++g_objectCount;
@@ -616,6 +640,7 @@ public:
     }
 
     ~ExplorerCommand() noexcept {
+        if (site_) site_->Release();
         --g_objectCount;
     }
 
@@ -630,9 +655,21 @@ public:
             AddRef();
             return S_OK;
         }
+        if (iid == IID_IObjectWithSite) { *result = static_cast<IObjectWithSite*>(this); AddRef(); return S_OK; }
         return E_NOINTERFACE;
     }
 
+    HRESULT SetSite(IUnknown* site) noexcept override {
+        if (site) site->AddRef();
+        if (site_) site_->Release();
+        site_ = site; contextValid_ = false;
+        return S_OK;
+    }
+    HRESULT GetSite(REFIID iid, void** value) noexcept override {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        return site_ ? site_->QueryInterface(iid, value) : E_FAIL;
+    }
     ULONG AddRef() noexcept override {
         return ++referenceCount_;
     }
@@ -679,6 +716,7 @@ public:
             return E_POINTER;
         }
         *value = kClsid;
+        if (!isRoot_ && !IsZeroToken(data_.token)) std::memcpy(value, data_.token, 16);
         return S_OK;
     }
 
@@ -688,14 +726,9 @@ public:
         }
 
         *state = ECS_ENABLED;
-        if (isRoot_ && fOkToBeSlow) {
-            // Explorer 不允许慢操作时不触碰 IShellItemArray；动态解析在 EnumSubCommands 执行。
-            std::wstring path;
-            if (ExtractFilesystemPath(items, path)) {
-                currentDirectory_.swap(path);
-            } else {
-                currentDirectory_.clear();
-            }
+        if (isRoot_) {
+            if (!fOkToBeSlow) return E_PENDING;
+            contextValid_ = CaptureContext(site_, items, currentDirectory_, selection_);
         }
         return S_OK;
     }
@@ -704,7 +737,7 @@ public:
         if (flags == nullptr) {
             return E_POINTER;
         }
-        *flags = isRoot_
+        *flags = (isRoot_ || !data_.children.empty())
             ? ECF_HASSUBCOMMANDS
             : (data_.isSeparator ? ECF_ISSEPARATOR : ECF_DEFAULT);
         return S_OK;
@@ -714,6 +747,9 @@ public:
     HRESULT EnumSubCommands(IEnumExplorerCommand** result) noexcept override;
 
 private:
+    IUnknown* site_ = nullptr;
+    bool contextValid_ = false;
+    std::vector<SelectionData> selection_;
     ULONG referenceCount_ = 1;
     bool isRoot_ = false;
     ChildData data_{};
@@ -833,15 +869,12 @@ HRESULT ExplorerCommand::EnumSubCommands(IEnumExplorerCommand** result) noexcept
         return E_POINTER;
     }
     *result = nullptr;
-    if (!isRoot_) {
-        return E_NOTIMPL;
-    }
+    if (!isRoot_ && data_.children.empty()) return E_NOTIMPL;
 
     try {
         children_.clear();
-        if (!currentDirectory_.empty()) {
-            Resolve(currentDirectory_, children_);
-        }
+        if (!isRoot_) children_ = data_.children;
+        else if (contextValid_) Resolve(currentDirectory_, children_, selection_);
 
         if (children_.empty()) {
             // Broker 不可用、路径不可用或响应非法时，始终保留最小可用入口。

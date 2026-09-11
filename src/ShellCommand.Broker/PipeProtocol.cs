@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.IO.Pipes;
 using System.Text;
+using ShellCommand.Core;
 
 namespace ShellCommand.Broker;
 
@@ -9,14 +10,14 @@ public enum MessageType : ushort
     PingRequest = 1, PingResponse = 2,
     ResolveMenuRequest = 10, ResolveMenuResponse = 11,
     InvokeRequest = 20, InvokeAccepted = 21,
-    OpenAppRequest = 30, OpenAppAccepted = 31
+    RefreshRequest = 30, RefreshResponse = 31
 }
 
 public readonly record struct PipeFrame(uint RequestId, MessageType Type, byte[] Payload);
 
 public static class PipeProtocol
 {
-    public const ushort Version = 2;
+    public const ushort Version = 3;
     public const int HeaderSize = 16;
     public const int MaxPayload = 256 * 1024;
     public const int MaxStringBytes = 32 * 1024;
@@ -150,10 +151,16 @@ public sealed class PipeServer : IDisposable
                 return new(frame.RequestId, MessageType.PingResponse, PipeProtocol.StringPayload(AppContext.BaseDirectory));
             case MessageType.ResolveMenuRequest:
             {
+                var context = DecodeContext(frame.Payload);
+                return new(frame.RequestId, MessageType.ResolveMenuResponse, EncodeResolve(_engine.Resolve(context)));
+            }
+            case MessageType.RefreshRequest:
+            {
                 var offset = 0;
                 var path = PipeProtocol.ReadString(frame.Payload, ref offset);
-                if (offset != frame.Payload.Length) throw new InvalidDataException("Trailing Resolve payload.");
-                return new(frame.RequestId, MessageType.ResolveMenuResponse, EncodeResolve(_engine.Resolve(path)));
+                if (offset != frame.Payload.Length) throw new InvalidDataException("Trailing refresh payload.");
+                _engine.Refresh(path.Length == 0 ? null : path);
+                return new(frame.RequestId, MessageType.RefreshResponse, []);
             }
             case MessageType.InvokeRequest:
                 if (frame.Payload.Length != 16) throw new InvalidDataException("Invalid token payload.");
@@ -164,22 +171,51 @@ public sealed class PipeServer : IDisposable
         }
     }
 
-    private static byte[] EncodeResolve(ResolveResult result)
+    public static byte[] ContextPayload(MenuContext context)
     {
         using var stream = new MemoryStream();
-        stream.WriteByte((byte)result.Status);
-        Span<byte> count = stackalloc byte[2];
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(count, (ushort)Math.Min(result.Items.Count, 100));
-        stream.Write(count);
-        foreach (var item in result.Items.Take(100))
+        PipeProtocol.WriteString(stream, context.Directory ?? "");
+        using var writer = new BinaryWriter(stream, Encoding.UTF8, true);
+        if (context.Selection.Count > 256) throw new InvalidDataException("Too many selections.");
+        writer.Write((ushort)context.Selection.Count);
+        foreach (var item in context.Selection) { writer.Write(item.IsFolder ? (byte)1 : (byte)0); PipeProtocol.WriteString(stream, item.Path); }
+        return stream.ToArray();
+    }
+    public static MenuContext DecodeContext(byte[] payload)
+    {
+        var offset = 0; var directory = PipeProtocol.ReadString(payload, ref offset);
+        if (offset + 2 > payload.Length) throw new InvalidDataException("Missing selection count.");
+        var count = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(offset, 2)); offset += 2;
+        if (count > 256) throw new InvalidDataException("Too many selections.");
+        var selection = new List<SelectionItem>();
+        for (var i = 0; i < count; i++)
         {
-            stream.WriteByte(item.Kind);
-            stream.WriteByte(item.Kind == 0 ? (byte)1 : (byte)0);
-            stream.WriteByte(0); stream.WriteByte(0);
-            stream.Write(item.Token.ToByteArray());
-            PipeProtocol.WriteString(stream, item.Kind == 1 ? string.Empty : item.Title);
-            PipeProtocol.WriteString(stream, item.Kind == 1 ? string.Empty : item.IconRef);
+            if (offset >= payload.Length || payload[offset] > 1) throw new InvalidDataException("Invalid selection type.");
+            var folder = payload[offset++] == 1;
+            selection.Add(new(PipeProtocol.ReadString(payload, ref offset), folder));
         }
+        if (offset != payload.Length) throw new InvalidDataException("Trailing context payload.");
+        return new(directory.Length == 0 ? null : directory, selection);
+    }
+    public static byte[] EncodeResolve(ResolveResult result)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream, Encoding.UTF8, true);
+        writer.Write((byte)result.Status);
+        var total = 0;
+        void Items(IReadOnlyList<MenuDto> items, int depth)
+        {
+            if (depth > 3 || items.Count > 128 || (total += items.Count) > 128) throw new InvalidDataException("Menu exceeds limits.");
+            writer.Write((ushort)items.Count);
+            foreach (var item in items)
+            {
+                writer.Write(item.Kind); writer.Write(item.Kind == 1 ? (byte)0 : (byte)1); writer.Write((ushort)0);
+                writer.Write(item.Token.ToByteArray());
+                PipeProtocol.WriteString(stream, item.Title); PipeProtocol.WriteString(stream, item.IconRef);
+                Items(item.Items ?? [], depth + 1);
+            }
+        }
+        Items(result.Items, 0);
         return stream.ToArray();
     }
 

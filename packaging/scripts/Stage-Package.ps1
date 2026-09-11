@@ -45,4 +45,4 @@ Configuration and third-party recovery records are preserved by uninstall.
 $files = @(Get-ChildItem $stage -Recurse -File | Sort-Object FullName | ForEach-Object {
     @{ Path=$_.FullName.Substring($stage.Length+1).Replace('\','/'); Sha256=(Get-FileHash $_.FullName -Algorithm SHA256).Hash }
 })
-@{ Protocol=2; Files=$files } | ConvertTo-Json -Depth 4 | Set-Content "$stage/build-manifest.json" -Encoding utf8
+@{ Protocol=3; Files=$files } | ConvertTo-Json -Depth 4 | Set-Content "$stage/build-manifest.json" -Encoding utf8

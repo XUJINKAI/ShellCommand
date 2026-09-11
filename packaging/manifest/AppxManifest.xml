@@ -25,6 +25,8 @@
         </com:Extension>
         <desktop4:Extension Category="windows.fileExplorerContextMenus">
           <desktop4:FileExplorerContextMenus>
+            <desktop5:ItemType Type="*"><desktop5:Verb Id="ShellCommandFiles" Clsid="B8B3D4E2-11A0-4A5B-8D2C-7D0A0DB10111" /></desktop5:ItemType>
+            <desktop5:ItemType Type="Directory"><desktop5:Verb Id="ShellCommandFolders" Clsid="B8B3D4E2-11A0-4A5B-8D2C-7D0A0DB10111" /></desktop5:ItemType>
             <desktop5:ItemType Type="Directory\Background">
               <desktop5:Verb Id="ShellCommand" Clsid="B8B3D4E2-11A0-4A5B-8D2C-7D0A0DB10111" />
             </desktop5:ItemType>

@@ -16,6 +16,7 @@ std::vector<std::uint8_t> Reply() {
         AppendUInt32(payload, 4);
         payload.insert(payload.end(), {'T', 'e', 's', 't'});
         AppendUInt32(payload, 0);
+        AppendUInt16(payload, 0);
     }
     return BuildFrame(kResolveResponse, 1, payload);
 }
