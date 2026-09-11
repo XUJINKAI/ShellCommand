@@ -1,3 +1,5 @@
+> **v2 重设计契约（feat/redesign-v2）**：本分支按 [已确认设计](../redesign-v2.md) 分阶段重写；下文是重设计前的历史基线，不再对新实现构成兼容性要求。仅接受 YAML v2，不导入或迁移旧配置。实施与验证进度见 [P0](../p0-validation.md)。
+
 # Explorer Contract
 
 ## Registration

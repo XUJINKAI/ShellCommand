@@ -16,7 +16,7 @@ public readonly record struct PipeFrame(uint RequestId, MessageType Type, byte[]
 
 public static class PipeProtocol
 {
-    public const ushort Version = 1;
+    public const ushort Version = 2;
     public const int HeaderSize = 16;
     public const int MaxPayload = 256 * 1024;
     public const int MaxStringBytes = 32 * 1024;
@@ -25,7 +25,7 @@ public static class PipeProtocol
     public static string DefaultPipeName()
     {
         var identity = OperatingSystem.IsWindows() ? System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value : Environment.UserName;
-        return "ShellCommand11." + (identity ?? "unknown");
+        return "ShellCommand11." + (identity ?? "unknown") + "." + (OperatingSystem.IsWindows() ? System.Diagnostics.Process.GetCurrentProcess().SessionId : 0);
     }
 
     public static async Task<PipeFrame> ReadAsync(Stream stream, CancellationToken cancellationToken)
@@ -100,31 +100,36 @@ public static class PipeProtocol
 public sealed class PipeServer : IDisposable
 {
     private readonly string _pipeName;
-    private readonly BrokerEngine _engine;
+    private readonly IBrokerEndpoint _engine;
     private readonly CancellationTokenSource _stop = new();
+    private readonly SemaphoreSlim _connections = new(16, 16);
 
-    public PipeServer(string pipeName, BrokerEngine engine) { _pipeName = pipeName; _engine = engine; }
+    public PipeServer(string pipeName, IBrokerEndpoint engine) { _pipeName = pipeName; _engine = engine; }
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _stop.Token);
         while (!linked.IsCancellationRequested)
         {
+            await _connections.WaitAsync(linked.Token).ConfigureAwait(false);
             var pipe = new NamedPipeServerStream(_pipeName, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly, 64 * 1024, 64 * 1024);
             try
             {
                 await pipe.WaitForConnectionAsync(linked.Token).ConfigureAwait(false);
                 _ = HandleAsync(pipe, linked.Token);
             }
-            catch (OperationCanceledException) when (linked.IsCancellationRequested) { pipe.Dispose(); }
-            catch { pipe.Dispose(); }
+            catch (OperationCanceledException) when (linked.IsCancellationRequested) { pipe.Dispose(); _connections.Release(); }
+            catch { pipe.Dispose(); _connections.Release(); }
         }
     }
 
     private async Task HandleAsync(NamedPipeServerStream pipe, CancellationToken cancellationToken)
     {
         using (pipe)
+        using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
         {
+            deadline.CancelAfter(TimeSpan.FromSeconds(1));
+            cancellationToken = deadline.Token;
             try
             {
                 var frame = await PipeProtocol.ReadAsync(pipe, cancellationToken).ConfigureAwait(false);
@@ -132,6 +137,7 @@ public sealed class PipeServer : IDisposable
                 await PipeProtocol.WriteAsync(pipe, response, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception) { /* malformed clients are isolated to this connection */ }
+            finally { _connections.Release(); }
         }
     }
 
@@ -140,7 +146,8 @@ public sealed class PipeServer : IDisposable
         switch (frame.Type)
         {
             case MessageType.PingRequest:
-                return new(frame.RequestId, MessageType.PingResponse, new byte[] { 0 });
+                if (frame.Payload.Length != 0) throw new InvalidDataException("Ping payload must be empty.");
+                return new(frame.RequestId, MessageType.PingResponse, PipeProtocol.StringPayload(AppContext.BaseDirectory));
             case MessageType.ResolveMenuRequest:
             {
                 var offset = 0;

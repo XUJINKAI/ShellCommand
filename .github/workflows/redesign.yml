@@ -1,0 +1,57 @@
+name: Redesign P0
+on:
+  push:
+    branches: [feat/redesign-v2]
+  pull_request:
+    branches: [win11dev]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Managed tests
+        shell: pwsh
+        run: |
+          foreach ($project in Get-ChildItem tests -Recurse -Filter *.csproj) {
+            dotnet test $project.FullName -c Release --logger trx
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+      - name: Native fault boundary
+        shell: cmd
+        run: >-
+          cl /nologo /std:c++20 /EHsc /W4 /WX /MT /utf-8
+          /DUNICODE /D_UNICODE /DNOMINMAX tests\ShellCommand.Explorer.Tests\NativeTests.cpp
+          /Fe:NativeTests.exe /link shlwapi.lib ole32.lib advapi32.lib shell32.lib uuid.lib
+          && NativeTests.exe
+      - name: Publish application
+        run: dotnet publish src/ShellCommand.App -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o artifacts/package
+      - name: Publish broker
+        run: dotnet publish src/ShellCommand.Broker -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o artifacts/package
+      - name: Build native DLL
+        shell: cmd
+        run: >-
+          cl /nologo /LD /std:c++20 /EHsc /W4 /WX /MT /utf-8
+          /DUNICODE /D_UNICODE /DNOMINMAX src\ShellCommand.Explorer\ShellCommandExplorer.cpp
+          /link /OUT:artifacts\package\ShellCommand.Explorer.dll shlwapi.lib ole32.lib advapi32.lib shell32.lib uuid.lib
+      - name: Prepare distribution and verify layout
+        shell: pwsh
+        run: |
+          ./packaging/scripts/Stage-Package.ps1 -Directory artifacts/package
+          ./packaging/scripts/Create-Zip.ps1 -SourceDirectory artifacts/package -Destination artifacts/ShellCommand-v2-P0-win-x64.zip
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ShellCommand-v2-P0-win-x64
+          path: |
+            artifacts/*.zip
+            tests/**/TestResults/*.trx

@@ -7,7 +7,13 @@ public enum ResolveStatus : byte { Ok, NoCommands, InvalidRequest, Busy, Interna
 public sealed record MenuDto(byte Kind, string Title, string IconRef, Guid Token);
 public sealed record ResolveResult(ResolveStatus Status, IReadOnlyList<MenuDto> Items, IReadOnlyList<Diagnostic> Diagnostics);
 
-public sealed class BrokerEngine
+public interface IBrokerEndpoint
+{
+    ResolveResult Resolve(string? workingDirectory);
+    Task<TokenStatus> InvokeAsync(Guid token, CancellationToken cancellationToken = default);
+}
+
+public sealed class BrokerEngine : IBrokerEndpoint
 {
     private readonly FileConfigRuntime _runtime;
     private readonly ActionTokenStore _tokens;

@@ -28,7 +28,7 @@ public class BrokerTests
     {
         using var stream = new MemoryStream();
         stream.Write("SC11"u8);
-        stream.WriteByte(1); stream.WriteByte(0); // version
+        stream.WriteByte((byte)PipeProtocol.Version); stream.WriteByte(0); // version
         stream.WriteByte(1); stream.WriteByte(0); // PingRequest
         stream.Write(new byte[4]);
         stream.Write(BitConverter.GetBytes((uint)(PipeProtocol.MaxPayload + 1)));

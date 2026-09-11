@@ -73,7 +73,7 @@ public partial class MainWindow : System.Windows.Window
         SetButtonsEnabled(false);
         try
         {
-            var result = await _installation.UninstallAsync();
+            var result = await InstallationManager.UninstallAsync();
             System.Windows.MessageBox.Show(this, result.Message, result.Success ? "卸载完成" : "卸载失败", System.Windows.MessageBoxButton.OK, result.Success ? System.Windows.MessageBoxImage.Information : System.Windows.MessageBoxImage.Error);
             if (result.Success && AskRestartExplorer()) InstallationManager.RestartExplorer();
         }
@@ -105,7 +105,7 @@ public partial class MainWindow : System.Windows.Window
     {
         Directory.CreateDirectory(Path.GetDirectoryName(InstallationManager.GlobalConfigPath)!);
         if (!File.Exists(InstallationManager.GlobalConfigPath))
-            File.WriteAllText(InstallationManager.GlobalConfigPath, "GlobalCommands: []\nFunctions:\n  CopyPath: false\n  EditGlobal: false\n");
+            File.WriteAllText(InstallationManager.GlobalConfigPath, "version: 2\nmenu: []\n");
         Process.Start(new ProcessStartInfo(InstallationManager.GlobalConfigPath) { UseShellExecute = true });
     }
 

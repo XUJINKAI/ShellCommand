@@ -29,195 +29,243 @@ public sealed record InstallationStatus(
 
 public sealed record InstallationOperationResult(bool Success, string Message, InstallationStatus Status);
 
-/// <summary>
-/// User-facing installation and repair operations for the portable package.
-/// The PowerShell calls are internal implementation details; users never need to run a script.
-/// </summary>
+public sealed record InstalledBuild(string Root, bool DeveloperRegistration);
+
 public sealed class InstallationManager
 {
-    private const string PackageName = "ShellCommand11";
     private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string RunValueName = "ShellCommand11.Broker";
+    private static string RecordPath => Path.Combine(DeploymentPackage.DataRoot, "state", "installation.json");
+    private readonly string _sourceRoot = NormalizeDirectory(AppContext.BaseDirectory);
+    public string AppRoot => ReadRecord()?.Root ?? _sourceRoot;
+    public static string GlobalConfigPath => Path.Combine(DeploymentPackage.DataRoot, "config", "global.shellcommand.yaml");
 
-    public string AppRoot { get; } = NormalizeDirectory(AppContext.BaseDirectory);
-    public string AppPath => Path.Combine(AppRoot, "ShellCommand.exe");
-    public string BrokerPath => Path.Combine(AppRoot, "ShellCommand.Broker.exe");
-    public string ExplorerDllPath => Path.Combine(AppRoot, "ShellCommand.Explorer.dll");
-    public string ManifestPath => Path.Combine(AppRoot, "AppxManifest.xml");
-    public static string GlobalConfigPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ShellCommand11", "config", "global.shellcommand.yaml");
+    private static InstalledBuild? ReadRecord()
+    {
+        try
+        {
+            using var stream = File.OpenRead(RecordPath);
+            if (stream.Length > 4096) throw new InvalidDataException("安装记录过大。");
+            var record = System.Text.Json.JsonSerializer.Deserialize<InstalledBuild>(stream) ?? throw new InvalidDataException("安装记录损坏。");
+            var runner = NormalizeDirectory(Path.Combine(DeploymentPackage.DataRoot, "runner"));
+            if (!string.Equals(Path.GetDirectoryName(record.Root), runner, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("安装记录指向 runner 以外的目录。");
+            return record;
+        }
+        catch (FileNotFoundException) { return null; }
+        catch (DirectoryNotFoundException) { return null; }
+    }
+
+    private static void WriteRecord(InstalledBuild record)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(RecordPath)!);
+        var temporary = RecordPath + ".tmp";
+        File.WriteAllText(temporary, System.Text.Json.JsonSerializer.Serialize(record));
+        File.Move(temporary, RecordPath, true);
+    }
 
     public async Task<InstallationStatus> GetStatusAsync(CancellationToken cancellationToken = default)
     {
-        var filesPresent = File.Exists(AppPath) && File.Exists(BrokerPath) && File.Exists(ExplorerDllPath) && File.Exists(ManifestPath);
-        var packageTask = IsPackageRegisteredAsync(cancellationToken);
-        var brokerTask = PingBrokerAsync(cancellationToken);
-        var packageRegistered = await packageTask.ConfigureAwait(false);
-        var brokerRunning = await brokerTask.ConfigureAwait(false);
-        var autoStartRegistered = IsAutoStartRegistered();
-
-        var state = !packageRegistered
-            ? IntegrationState.NotInstalled
-            : !filesPresent
-                ? IntegrationState.PackageFilesMissing
-                : autoStartRegistered
-                    ? IntegrationState.Installed
-                    : IntegrationState.NeedsRepair;
-
-        var message = state switch
-        {
-            IntegrationState.NotInstalled => filesPresent ? "尚未安装右键菜单集成" : "安装包文件不完整，无法安装",
-            IntegrationState.Installed when brokerRunning => "已安装，ShellCommand 正在运行",
-            IntegrationState.Installed => "已安装，但后台服务尚未响应",
-            IntegrationState.PackageFilesMissing => "当前注册的集成找不到完整程序文件",
-            _ => "安装不完整，需要修复"
-        };
-        return new(state, packageRegistered, filesPresent, autoStartRegistered, brokerRunning, message);
+        var record = ReadRecord();
+        var root = record?.Root ?? _sourceRoot;
+        var files = await Task.Run(() => { try { DeploymentPackage.Validate(root); return true; } catch (Exception) { return false; } }, cancellationToken).ConfigureAwait(false);
+        var package = await RunPowerShellAsync("$ErrorActionPreference='Stop'; $p=Get-AppxPackage -Name 'ShellCommand11'; if($p){$p.PackageFullName}", cancellationToken).ConfigureAwait(false);
+        if (!package.Success) throw new InvalidOperationException(package.ErrorOrOutput);
+        var registered = !string.IsNullOrWhiteSpace(package.Output);
+        var correctLocation = registered && string.Equals(RegisteredLocation(package.Output), NormalizeDirectory(root), StringComparison.OrdinalIgnoreCase);
+        var broker = record is not null && await PingBrokerAsync(root, cancellationToken).ConfigureAwait(false);
+        var autoStart = string.Equals(ReadAutoStart(), Quote(Path.Combine(root, "ShellCommand.Broker.exe")), StringComparison.OrdinalIgnoreCase);
+        var state = !registered ? IntegrationState.NotInstalled : !files ? IntegrationState.PackageFilesMissing : record is not null && correctLocation && broker && autoStart ? IntegrationState.Installed : IntegrationState.NeedsRepair;
+        var message = state == IntegrationState.Installed
+            ? (record!.DeveloperRegistration ? "开发注册已启用；尚未通过正式签名安装验证。" : "已安装，后台协议与 runner 路径检查通过。")
+            : registered ? "集成需要修复，请检查 runner、注册与后台。" : "尚未启用右键菜单集成。";
+        return new(state, registered, files, autoStart, broker, message);
     }
 
-    public async Task<InstallationOperationResult> InstallOrRepairAsync(CancellationToken cancellationToken = default)
+    public async Task<InstallationOperationResult> InstallOrRepairAsync(bool developerRegistration = false, CancellationToken cancellationToken = default)
     {
-        var before = await GetStatusAsync(cancellationToken).ConfigureAwait(false);
-        if (!before.FilesPresent)
-            return new(false, "当前目录缺少安装所需文件。请从完整的 ShellCommand ZIP 包中运行 ShellCommand.exe。", before);
-
+        InstalledBuild? previous = null;
+        string? previousAutoStart = null;
+        bool registrationAttempted = false;
+        FileStream? operationLock = null;
         try
         {
-            var registration = await RunPowerShellAsync($"$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; Add-AppxPackage -Register {PowerShellLiteral(ManifestPath)} -ExternalLocation {PowerShellLiteral(AppRoot)} -ForceApplicationShutdown", cancellationToken).ConfigureAwait(false);
-            if (!registration.Success)
-                return new(false, "Windows 集成注册失败：" + registration.ErrorOrOutput, await GetStatusAsync(cancellationToken).ConfigureAwait(false));
-
-            RegisterAutoStart();
-            EnsureGlobalConfig();
-            await EnsureBrokerAsync(cancellationToken).ConfigureAwait(false);
-            var after = await GetStatusAsync(cancellationToken).ConfigureAwait(false);
-            return after.PackageRegistered && after.FilesPresent && after.AutoStartRegistered
-                ? new(true, "ShellCommand 已安装。右键菜单可能需要重启 Explorer 才会刷新。", after)
-                : new(false, "安装流程已执行，但状态检查未通过：" + after.Message, after);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or Win32Exception)
-        {
-            var status = await GetStatusAsync(CancellationToken.None).ConfigureAwait(false);
-            return new(false, "安装失败：" + ex.Message, status);
-        }
-    }
-
-    public async Task<InstallationOperationResult> UninstallAsync(CancellationToken cancellationToken = default)
-    {
-        try
-        {
+            Directory.CreateDirectory(Path.GetDirectoryName(RecordPath)!);
+            operationLock = new FileStream(RecordPath + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            previous = ReadRecord();
+            previousAutoStart = ReadAutoStart();
+            var target = await Task.Run(() => DeploymentPackage.Stage(_sourceRoot, DeploymentPackage.DataRoot), cancellationToken).ConfigureAwait(false);
+            var next = new InstalledBuild(target, developerRegistration);
+            if (!developerRegistration && !File.Exists(Path.Combine(target, "ShellCommand.Identity.msix")))
+                throw new InvalidOperationException("本开发构建未附带签名身份包，不能正式启用。开发测试请使用 --developer-install；不会自动打开 Windows 开发者模式。");
+            foreach (var folder in new[] { "config", "state", "cache", "logs", "temp" }) Directory.CreateDirectory(Path.Combine(DeploymentPackage.DataRoot, folder));
+            // P0 deliberately does not generate a legacy template. P1 installs a v2 template.
             StopInstalledBroker();
-            var registration = await RunPowerShellAsync($"$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; Get-AppxPackage -Name {PowerShellLiteral(PackageName)} | Remove-AppxPackage", cancellationToken).ConfigureAwait(false);
-            if (!registration.Success)
-                return new(false, "Windows 集成注销失败：" + registration.ErrorOrOutput, await GetStatusAsync(cancellationToken).ConfigureAwait(false));
+            registrationAttempted = true;
+            await UnregisterAsync(cancellationToken).ConfigureAwait(false);
+            await RegisterAsync(next, cancellationToken).ConfigureAwait(false);
+            WriteAutoStart(Quote(Path.Combine(target, "ShellCommand.Broker.exe")));
+            await EnsureBrokerAsync(target, cancellationToken).ConfigureAwait(false);
+            WriteRecord(next);
+            var status = await GetStatusAsync(cancellationToken).ConfigureAwait(false);
+            if (!status.IsInstalled) throw new InvalidOperationException("安装后健康检查失败。");
+            return new(true, status.Message + " 程序已复制到 " + target, status);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or Win32Exception or System.Text.Json.JsonException or OperationCanceledException)
+        {
+            var message = "安装失败：" + ex.Message;
+            if (registrationAttempted)
+            {
+                try
+                {
+                    StopInstalledBroker();
+                    if (previous is null)
+                    {
+                        await UnregisterAsync(CancellationToken.None).ConfigureAwait(false);
+                        File.Delete(RecordPath);
+                    }
+                    else
+                    {
+                        await UnregisterAsync(CancellationToken.None).ConfigureAwait(false);
+                        await RegisterAsync(previous, CancellationToken.None).ConfigureAwait(false);
+                        WriteRecord(previous);
+                        await EnsureBrokerAsync(previous.Root, CancellationToken.None).ConfigureAwait(false);
+                    }
+                    WriteAutoStart(previousAutoStart);
+                    message += " 已恢复先前安装状态。";
+                }
+                catch (Exception rollback) { message += " 恢复失败：" + rollback.Message + "；可运行 --disable-integration 注销。"; }
+            }
+            return new(false, message, new(IntegrationState.NeedsRepair, false, false, false, false, message));
+        }
+        finally { operationLock?.Dispose(); }
+    }
 
-            RemoveAutoStart();
-            var after = await GetStatusAsync(cancellationToken).ConfigureAwait(false);
-            return !after.PackageRegistered && !after.AutoStartRegistered
-                ? new(true, "ShellCommand 已卸载。用户配置文件已保留。右键菜单可能需要重启 Explorer。", after)
-                : new(false, "卸载流程已执行，但状态检查未通过：" + after.Message, after);
+    private static async Task RegisterAsync(InstalledBuild build, CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(build.Root, build.DeveloperRegistration ? "AppxManifest.xml" : "ShellCommand.Identity.msix");
+        var mode = build.DeveloperRegistration ? "-Register" : "-Path";
+        var result = await RunPowerShellAsync($"$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; Add-AppxPackage {mode} {PowerShellLiteral(path)} -ExternalLocation {PowerShellLiteral(build.Root)}", cancellationToken).ConfigureAwait(false);
+        if (!result.Success) throw new InvalidOperationException("Windows 集成注册失败：" + result.ErrorOrOutput);
+        // Verify the actual registered external location, not just a package name.
+        var verify = await RunPowerShellAsync("$ErrorActionPreference='Stop'; (Get-AppxPackage -Name 'ShellCommand11').PackageFullName", cancellationToken).ConfigureAwait(false);
+        if (!verify.Success || string.IsNullOrWhiteSpace(verify.Output) || !string.Equals(RegisteredLocation(verify.Output), NormalizeDirectory(build.Root), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Windows 未报告预期的 runner 注册位置。" + verify.ErrorOrOutput);
+    }
+
+    private static string? RegisteredLocation(string fullName)
+    {
+        uint length = 0;
+        const int effectiveExternal = 5;
+        if (GetPackagePathByFullName2(fullName, effectiveExternal, ref length, null) != 122 || length is 0 or > 32768) return null;
+        var buffer = new char[length];
+        if (GetPackagePathByFullName2(fullName, effectiveExternal, ref length, buffer) != 0) return null;
+        return NormalizeDirectory(new string(buffer, 0, checked((int)length - 1)));
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernelbase.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, ExactSpelling = true)]
+    private static extern int GetPackagePathByFullName2(string packageFullName, int packagePathType, ref uint pathLength, [System.Runtime.InteropServices.Out] char[]? path);
+
+    private static async Task UnregisterAsync(CancellationToken cancellationToken)
+    {
+        var result = await RunPowerShellAsync("$ErrorActionPreference='Stop'; Get-AppxPackage -Name 'ShellCommand11' | Remove-AppxPackage", cancellationToken).ConfigureAwait(false);
+        if (!result.Success) throw new InvalidOperationException(result.ErrorOrOutput);
+    }
+
+    public static async Task<InstallationOperationResult> UninstallAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(RecordPath)!);
+            using var operationLock = new FileStream(RecordPath + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            // No configuration or installation record is needed for emergency removal.
+            await UnregisterAsync(cancellationToken).ConfigureAwait(false);
+            WriteAutoStart(null);
+            StopInstalledBroker();
+            File.Delete(RecordPath);
+            foreach (var folder in new[] { "cache", "temp", "runner" })
+            {
+                var path = Path.Combine(DeploymentPackage.DataRoot, folder);
+                try { if (Directory.Exists(path)) Directory.Delete(path, true); }
+                catch (IOException) { /* loaded binaries remain for later cleanup */ }
+                catch (UnauthorizedAccessException) { }
+            }
+            return new(true, "已注销集成和自启动，保留配置及菜单恢复记录。占用中的程序文件将在关闭相关进程后才能删除。", new(IntegrationState.NotInstalled, false, false, false, false, "已注销"));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or Win32Exception)
         {
-            var status = await GetStatusAsync(CancellationToken.None).ConfigureAwait(false);
-            return new(false, "卸载失败：" + ex.Message, status);
+            return new(false, "卸载失败：" + ex.Message, new(IntegrationState.NeedsRepair, false, false, false, false, ex.Message));
         }
     }
 
     public static void RestartExplorer()
     {
-        foreach (var process in Process.GetProcessesByName("explorer"))
+        StopSessionProcesses("explorer", false);
+        Process.Start(new ProcessStartInfo("explorer.exe") { UseShellExecute = true })?.Dispose();
+    }
+
+    private static void StopInstalledBroker() => StopSessionProcesses("ShellCommand.Broker", true);
+    private static void StopSessionProcesses(string name, bool requireRunner)
+    {
+        var session = Process.GetCurrentProcess().SessionId;
+        foreach (var process in Process.GetProcessesByName(name))
         {
-            try { process.Kill(); process.WaitForExit(3000); }
-            catch (InvalidOperationException) { }
-            finally { process.Dispose(); }
+            using (process)
+            {
+                try
+                {
+                    if (process.SessionId != session) continue;
+                    if (requireRunner && !(process.MainModule?.FileName?.StartsWith(Path.Combine(DeploymentPackage.DataRoot, "runner") + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ?? false)) continue;
+                    process.Kill();
+                    process.WaitForExit(3000);
+                }
+                catch (InvalidOperationException) { }
+                catch (Win32Exception) { }
+            }
         }
-        Process.Start(new ProcessStartInfo("explorer.exe") { UseShellExecute = true });
     }
 
-    private static async Task<bool> IsPackageRegisteredAsync(CancellationToken cancellationToken)
+    private static async Task EnsureBrokerAsync(string root, CancellationToken cancellationToken)
     {
-        // Detect registrations from an older extracted directory as well. Otherwise
-        // launching a newer copy would hide the old package and disable Uninstall.
-        var result = await RunPowerShellAsync($"$ProgressPreference = 'SilentlyContinue'; $package = Get-AppxPackage -Name {PowerShellLiteral(PackageName)} | Select-Object -First 1; if ($null -ne $package) {{ 'true' }} else {{ 'false' }}", cancellationToken).ConfigureAwait(false);
-        return result.Success && string.Equals(result.Output.Trim(), "true", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private async Task EnsureBrokerAsync(CancellationToken cancellationToken)
-    {
-        if (await PingBrokerAsync(cancellationToken).ConfigureAwait(false)) return;
-        var process = Process.Start(new ProcessStartInfo(BrokerPath)
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = AppRoot
-        });
-        process?.Dispose();
+        if (await PingBrokerAsync(root, cancellationToken).ConfigureAwait(false)) return;
+        using var process = Process.Start(new ProcessStartInfo(Path.Combine(root, "ShellCommand.Broker.exe")) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = root });
         for (var attempt = 0; attempt < 12; attempt++)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             await Task.Delay(250, cancellationToken).ConfigureAwait(false);
-            if (await PingBrokerAsync(cancellationToken).ConfigureAwait(false)) return;
+            if (await PingBrokerAsync(root, cancellationToken).ConfigureAwait(false)) return;
         }
+        throw new InvalidOperationException("后台未在预期 runner 响应健康检查。");
     }
 
-    private static async Task<bool> PingBrokerAsync(CancellationToken cancellationToken)
+    private static async Task<bool> PingBrokerAsync(string root, CancellationToken cancellationToken)
     {
         try
         {
             using var pipe = new NamedPipeClientStream(".", PipeProtocol.DefaultPipeName(), PipeDirection.InOut, PipeOptions.Asynchronous);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(TimeSpan.FromSeconds(1));
+            timeout.CancelAfter(TimeSpan.FromMilliseconds(300));
             await pipe.ConnectAsync(timeout.Token).ConfigureAwait(false);
-            await PipeProtocol.WriteAsync(pipe, new PipeFrame(1, MessageType.PingRequest, Array.Empty<byte>()), timeout.Token).ConfigureAwait(false);
+            await PipeProtocol.WriteAsync(pipe, new(1, MessageType.PingRequest, []), timeout.Token).ConfigureAwait(false);
             var response = await PipeProtocol.ReadAsync(pipe, timeout.Token).ConfigureAwait(false);
-            return response.Type == MessageType.PingResponse;
+            var offset = 0;
+            var actualRoot = PipeProtocol.ReadString(response.Payload, ref offset);
+            return response.Type == MessageType.PingResponse && response.RequestId == 1 && offset == response.Payload.Length && string.Equals(NormalizeDirectory(actualRoot), NormalizeDirectory(root), StringComparison.OrdinalIgnoreCase);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return false; }
         catch (IOException) { return false; }
-        catch (InvalidDataException) { return false; }
+        catch (ArgumentException) { return false; }
     }
 
-    private bool IsAutoStartRegistered()
+    private static string? ReadAutoStart()
     {
-        using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: false);
-        var value = key?.GetValue(RunValueName, null, RegistryValueOptions.DoNotExpandEnvironmentNames) as string;
-        return !string.IsNullOrWhiteSpace(value) && string.Equals(value.Trim().Trim('"'), BrokerPath, StringComparison.OrdinalIgnoreCase);
+        using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath);
+        return key?.GetValue(RunValueName, null, RegistryValueOptions.DoNotExpandEnvironmentNames) as string;
     }
-
-    private void RegisterAutoStart()
+    private static void WriteAutoStart(string? value)
     {
         using var key = Registry.CurrentUser.CreateSubKey(RunKeyPath);
-        key?.SetValue(RunValueName, Quote(BrokerPath), RegistryValueKind.String);
-    }
-
-    private static void RemoveAutoStart()
-    {
-        using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: true);
-        key?.DeleteValue(RunValueName, throwOnMissingValue: false);
-    }
-
-    private static void StopInstalledBroker()
-    {
-        foreach (var process in Process.GetProcessesByName("ShellCommand.Broker"))
-        {
-            try
-            {
-                // Broker is a product-owned per-user process. Stop old extracted
-                // copies too, otherwise they can keep the previous package files locked.
-                process.Kill(entireProcessTree: true);
-                process.WaitForExit(3000);
-            }
-            catch (InvalidOperationException) { }
-            catch (UnauthorizedAccessException) { }
-            finally { process.Dispose(); }
-        }
-    }
-
-    private static void EnsureGlobalConfig()
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(GlobalConfigPath)!);
-        if (!File.Exists(GlobalConfigPath))
-            File.WriteAllText(GlobalConfigPath, "GlobalCommands: []\nFunctions:\n  CopyPath: false\n  EditGlobal: false\n", new UTF8Encoding(false));
+        if (value is null) key.DeleteValue(RunValueName, false);
+        else key.SetValue(RunValueName, value, RegistryValueKind.String);
     }
 
     private static async Task<PowerShellResult> RunPowerShellAsync(string script, CancellationToken cancellationToken)

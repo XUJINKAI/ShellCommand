@@ -31,12 +31,12 @@ if exist "%ROOT%\artifacts\publish-broker" rmdir /S /Q "%ROOT%\artifacts\publish
 mkdir "%STAGE%\Assets"
 mkdir "%WORK%"
 
-dotnet publish "%ROOT%\src\ShellCommand.App\ShellCommand.App.csproj" -c "%CONFIG%" -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o "%APP_WORK_DIR%"
+dotnet publish "%ROOT%\src\ShellCommand.App\ShellCommand.App.csproj" -c "%CONFIG%" -r win-x64 --self-contained false -p:PublishSingleFile=true -o "%APP_WORK_DIR%"
 if errorlevel 1 (
   echo App publish failed. 1>&2
   goto :package_failed
 )
-dotnet publish "%ROOT%\src\ShellCommand.Broker\ShellCommand.Broker.csproj" -c "%CONFIG%" -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o "%BROKER_WORK_DIR%"
+dotnet publish "%ROOT%\src\ShellCommand.Broker\ShellCommand.Broker.csproj" -c "%CONFIG%" -r win-x64 --self-contained false -p:PublishSingleFile=true -o "%BROKER_WORK_DIR%"
 if errorlevel 1 (
   echo Broker publish failed. 1>&2
   goto :package_failed
@@ -51,18 +51,13 @@ if not exist "%ROOT%\x64\%CONFIG%\ShellCommand.Explorer.dll" (
   goto :package_failed
 )
 copy /Y "%ROOT%\x64\%CONFIG%\ShellCommand.Explorer.dll" "%STAGE%\" >nul
-copy /Y "%ROOT%\packaging\manifest\AppxManifest.xml" "%STAGE%\" >nul
-copy /Y "%ROOT%\docs\screenshot\win10-preview.png" "%STAGE%\Assets\StoreLogo.png" >nul
-copy /Y "%ROOT%\docs\screenshot\win10-preview.png" "%STAGE%\Assets\Square150x150Logo.png" >nul
-copy /Y "%ROOT%\docs\screenshot\win10-preview.png" "%STAGE%\Assets\Square44x44Logo.png" >nul
-copy /Y "%ROOT%\README_cn.md" "%STAGE%\README.md" >nul
-copy /Y "%ROOT%\packaging\scripts\Uninstall.cmd" "%STAGE%\Uninstall.cmd" >nul
-
 where powershell.exe >nul 2>&1
 if errorlevel 1 (
   echo powershell.exe was not found. Windows is required to create the ZIP. 1>&2
   goto :package_failed
 )
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ROOT%\packaging\scripts\Stage-Package.ps1" -Directory "%STAGE%"
+if errorlevel 1 goto :package_failed
 powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ROOT%\packaging\scripts\Create-Zip.ps1" -SourceDirectory "%STAGE%" -Destination "%ZIP%"
 if errorlevel 1 (
   echo ZIP creation failed. 1>&2

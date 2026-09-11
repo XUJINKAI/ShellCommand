@@ -13,6 +13,7 @@
 #include <cwchar>
 #include <limits>
 #include <new>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -26,7 +27,7 @@ extern "C" IMAGE_DOS_HEADER __ImageBase;
 namespace {
 
 // 协议常量必须与 docs/contracts/broker-ipc.md 保持一致。
-constexpr std::uint16_t kProtocolVersion = 1;
+constexpr std::uint16_t kProtocolVersion = 2;
 constexpr std::uint16_t kResolveRequest = 10;
 constexpr std::uint16_t kResolveResponse = 11;
 constexpr std::uint16_t kInvokeRequest = 20;
@@ -45,6 +46,8 @@ constexpr GUID kClsid = {
 
 std::atomic_ulong g_objectCount = 0;
 std::atomic_ulong g_serverLocks = 0;
+std::atomic_ulong g_pendingRequests = 0;
+constexpr unsigned long kMaxPendingRequests = 8;
 
 struct ChildData {
     std::wstring title;
@@ -112,45 +115,52 @@ bool IsSc11Frame(const std::uint8_t* header, std::uint16_t messageType,
     return payloadLength <= kMaxPayloadBytes;
 }
 
-// 使用一个绝对 deadline 覆盖连接后的每一次读写，避免每个阶段重复等待 30ms。
-bool TimedIo(HANDLE pipe, bool write, void* data, DWORD length,
-             ULONGLONG deadline) noexcept {
+// Called only by a bounded request worker. Completion owns its memory even when
+// CancelIoEx is delayed. Never perform this cleanup wait on an Explorer callback.
+struct PendingIo final {
     OVERLAPPED overlapped{};
-    overlapped.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    if (overlapped.hEvent == nullptr) {
-        return false;
+    std::vector<std::uint8_t> bytes;
+    explicit PendingIo(DWORD length) : bytes(length) {
+        overlapped.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     }
+    ~PendingIo() { if (overlapped.hEvent) CloseHandle(overlapped.hEvent); }
+};
 
-    DWORD transferred = 0;
-    const BOOL completed = write
-        ? WriteFile(pipe, data, length, &transferred, &overlapped)
-        : ReadFile(pipe, data, length, &transferred, &overlapped);
-
-    if (!completed) {
-        if (GetLastError() != ERROR_IO_PENDING) {
-            CloseHandle(overlapped.hEvent);
-            return false;
+bool TimedIo(HANDLE pipe, bool write, void* data, DWORD length,
+             ULONGLONG deadline) {
+    auto operation = std::make_unique<PendingIo>(length);
+    if (!operation->overlapped.hEvent) return false;
+    if (write && length) std::memcpy(operation->bytes.data(), data, length);
+    DWORD position = 0;
+    while (position < length) {
+        if (GetTickCount64() >= deadline) return false;
+        ResetEvent(operation->overlapped.hEvent);
+        DWORD transferred = 0;
+        const BOOL completed = write
+            ? WriteFile(pipe, operation->bytes.data() + position, length - position,
+                        &transferred, &operation->overlapped)
+            : ReadFile(pipe, operation->bytes.data() + position, length - position,
+                       &transferred, &operation->overlapped);
+        if (!completed) {
+            if (GetLastError() != ERROR_IO_PENDING) return false;
+            const auto now = GetTickCount64();
+            const auto waitMs = now >= deadline ? 0 : static_cast<DWORD>(deadline - now);
+            if (WaitForSingleObject(operation->overlapped.hEvent, waitMs) != WAIT_OBJECT_0) {
+                CancelIoEx(pipe, &operation->overlapped);
+                // Even ERROR_NOT_FOUND from cancellation can race with completion.
+                // The bounded worker retains the pipe and buffers until signaled.
+                WaitForSingleObject(operation->overlapped.hEvent, INFINITE);
+                GetOverlappedResult(pipe, &operation->overlapped, &transferred, FALSE);
+                return false;
+            }
+            if (!GetOverlappedResult(pipe, &operation->overlapped, &transferred, FALSE)) return false;
         }
-
-        const ULONGLONG now = GetTickCount64();
-        const DWORD waitMs = now >= deadline
-            ? 0
-            : static_cast<DWORD>(std::min<ULONGLONG>(
-                deadline - now, std::numeric_limits<DWORD>::max()));
-
-        if (WaitForSingleObject(overlapped.hEvent, waitMs) != WAIT_OBJECT_0) {
-            CancelIoEx(pipe, &overlapped);
-            CloseHandle(overlapped.hEvent);
-            return false;
-        }
-        if (!GetOverlappedResult(pipe, &overlapped, &transferred, FALSE)) {
-            CloseHandle(overlapped.hEvent);
-            return false;
-        }
+        if (transferred == 0) return false;
+        position += transferred;
     }
-
-    CloseHandle(overlapped.hEvent);
-    return transferred == length;
+    if (GetTickCount64() >= deadline) return false;
+    if (!write && length) std::memcpy(data, operation->bytes.data(), length);
+    return true;
 }
 
 std::wstring GetCurrentUserSid() noexcept {
@@ -188,14 +198,20 @@ std::wstring GetCurrentUserSid() noexcept {
 }
 
 HANDLE OpenBrokerPipe() {
-    const std::wstring pipeName = L"\\\\.\\pipe\\ShellCommand11." + GetCurrentUserSid();
+    DWORD session = 0;
+    if (!ProcessIdToSessionId(GetCurrentProcessId(), &session)) return INVALID_HANDLE_VALUE;
+#ifdef SHELLCOMMAND_NATIVE_TEST
+    const std::wstring pipeName = L"\\\\.\\pipe\\ShellCommand11.Test." + std::to_wstring(GetCurrentProcessId());
+#else
+    const std::wstring pipeName = L"\\\\.\\pipe\\ShellCommand11." + GetCurrentUserSid() + L"." + std::to_wstring(session);
+#endif
     return CreateFileW(
         pipeName.c_str(),
         GENERIC_READ | GENERIC_WRITE,
         0,
         nullptr,
         OPEN_EXISTING,
-        FILE_FLAG_OVERLAPPED,
+        FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
         nullptr);
 }
 
@@ -276,7 +292,7 @@ bool ReadUtf8String(const std::vector<std::uint8_t>& payload, std::size_t& posit
     return true;
 }
 
-bool ReadFrame(HANDLE pipe, std::uint16_t expectedType, ULONGLONG deadline,
+bool ReadFrame(HANDLE pipe, std::uint16_t expectedType, std::uint32_t requestId, ULONGLONG deadline,
                std::vector<std::uint8_t>& payload) {
     std::uint8_t header[16]{};
     if (!TimedIo(pipe, false, header, sizeof(header), deadline)) {
@@ -284,7 +300,7 @@ bool ReadFrame(HANDLE pipe, std::uint16_t expectedType, ULONGLONG deadline,
     }
 
     std::uint32_t payloadLength = 0;
-    if (!IsSc11Frame(header, expectedType, payloadLength)) {
+    if (!IsSc11Frame(header, expectedType, payloadLength) || ReadUInt32(header + 8) != requestId) {
         return false;
     }
 
@@ -374,7 +390,7 @@ bool ParseResolveResponse(const std::vector<std::uint8_t>& payload,
     return position == payload.size();
 }
 
-bool ResolveCore(const std::wstring& directory, std::vector<ChildData>& children) {
+bool ResolveCore(const std::wstring& directory, std::vector<ChildData>& children, ULONGLONG deadline) {
     ScopedHandle pipe(OpenBrokerPipe());
     if (pipe.get() == INVALID_HANDLE_VALUE) {
         return false;
@@ -393,7 +409,6 @@ bool ResolveCore(const std::wstring& directory, std::vector<ChildData>& children
 
     const std::vector<std::uint8_t> frame =
         BuildFrame(kResolveRequest, 1, requestPayload);
-    const ULONGLONG deadline = GetTickCount64() + kIpcDeadlineMs;
     if (!TimedIo(
             pipe.get(),
             true,
@@ -404,23 +419,13 @@ bool ResolveCore(const std::wstring& directory, std::vector<ChildData>& children
     }
 
     std::vector<std::uint8_t> responsePayload;
-    if (!ReadFrame(pipe.get(), kResolveResponse, deadline, responsePayload)) {
+    if (!ReadFrame(pipe.get(), kResolveResponse, 1, deadline, responsePayload)) {
         return false;
     }
-    return ParseResolveResponse(responsePayload, children);
+    return ParseResolveResponse(responsePayload, children) && GetTickCount64() < deadline;
 }
 
-bool Resolve(const std::wstring& directory, std::vector<ChildData>& children) noexcept {
-    try {
-        return ResolveCore(directory, children);
-    } catch (...) {
-        // 任何分配、编码或解析异常都只能导致 fallback，不能穿过 Explorer 边界。
-        children.clear();
-        return false;
-    }
-}
-
-bool InvokeTokenCore(const std::uint8_t token[16]) {
+bool InvokeTokenCore(const std::uint8_t token[16], ULONGLONG deadline) {
     ScopedHandle pipe(OpenBrokerPipe());
     if (pipe.get() == INVALID_HANDLE_VALUE) {
         return false;
@@ -429,7 +434,6 @@ bool InvokeTokenCore(const std::uint8_t token[16]) {
     std::vector<std::uint8_t> requestPayload(token, token + 16);
     const std::vector<std::uint8_t> frame =
         BuildFrame(kInvokeRequest, 2, requestPayload);
-    const ULONGLONG deadline = GetTickCount64() + kIpcDeadlineMs;
     if (!TimedIo(
             pipe.get(),
             true,
@@ -440,7 +444,7 @@ bool InvokeTokenCore(const std::uint8_t token[16]) {
     }
 
     std::vector<std::uint8_t> responsePayload;
-    if (!ReadFrame(pipe.get(), kInvokeResponse, deadline, responsePayload) ||
+    if (!ReadFrame(pipe.get(), kInvokeResponse, 2, deadline, responsePayload) ||
         responsePayload.size() != 1) {
         return false;
     }
@@ -449,12 +453,86 @@ bool InvokeTokenCore(const std::uint8_t token[16]) {
     return responsePayload[0] == 0;
 }
 
-bool InvokeToken(const std::uint8_t token[16]) noexcept {
+struct Request final {
+    ScopedHandle ready{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+    std::wstring directory;
+    std::vector<ChildData> children;
+    std::uint8_t token[16]{};
+    ULONGLONG deadline = 0;
+    HMODULE module = nullptr;
+    bool invoke = false;
+    bool success = false;
+    std::atomic_bool completed = false;
+};
+
+DWORD WINAPI RequestWorker(void* context) noexcept {
+    auto holder = std::unique_ptr<std::shared_ptr<Request>>(
+        static_cast<std::shared_ptr<Request>*>(context));
+    auto request = *holder;
+    holder.reset();
+    const HMODULE module = request->module;
     try {
-        return InvokeTokenCore(token);
-    } catch (...) {
-        return false;
+        if (GetTickCount64() < request->deadline) {
+            request->success = request->invoke
+                ? InvokeTokenCore(request->token, request->deadline)
+                : ResolveCore(request->directory, request->children, request->deadline);
+        }
+    } catch (...) { request->success = false; }
+    request->completed.store(true, std::memory_order_release);
+    SetEvent(request->ready.get());
+    request.reset();
+    --g_pendingRequests;
+    --g_objectCount;
+    FreeLibraryAndExitThread(module, 0);
+}
+
+bool RunRequest(const std::shared_ptr<Request>& request) noexcept {
+    auto pending = g_pendingRequests.load();
+    do {
+        if (pending >= kMaxPendingRequests) return false;
+    } while (!g_pendingRequests.compare_exchange_weak(pending, pending + 1));
+    ++g_objectCount;
+    if (!request->ready.get() || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+            reinterpret_cast<LPCWSTR>(&__ImageBase), &request->module)) {
+        --g_pendingRequests; --g_objectCount; return false;
     }
+    auto* holder = new (std::nothrow) std::shared_ptr<Request>(request);
+    const HANDLE thread = holder ? CreateThread(nullptr, 0, RequestWorker, holder, 0, nullptr) : nullptr;
+    if (!thread) {
+        delete holder;
+        FreeLibrary(request->module);
+        --g_pendingRequests; --g_objectCount; return false;
+    }
+    CloseHandle(thread);
+    const auto now = GetTickCount64();
+    const auto waitMs = now >= request->deadline ? 0 : static_cast<DWORD>(request->deadline - now);
+    if (WaitForSingleObject(request->ready.get(), waitMs) != WAIT_OBJECT_0) return false;
+    return request->completed.load(std::memory_order_acquire) && request->success
+        && GetTickCount64() < request->deadline;
+}
+
+bool Resolve(const std::wstring& directory, std::vector<ChildData>& children) noexcept {
+    const auto deadline = GetTickCount64() + kIpcDeadlineMs;
+    try {
+        if (directory.size() > kMaxStringBytes) return false;
+        auto request = std::make_shared<Request>();
+        request->deadline = deadline;
+        request->directory = directory;
+        if (!RunRequest(request)) return false;
+        children = std::move(request->children);
+        return true;
+    } catch (...) { children.clear(); return false; }
+}
+
+bool InvokeToken(const std::uint8_t token[16]) noexcept {
+    const auto deadline = GetTickCount64() + kIpcDeadlineMs;
+    try {
+        auto request = std::make_shared<Request>();
+        request->deadline = deadline;
+        request->invoke = true;
+        std::memcpy(request->token, token, 16);
+        return RunRequest(request);
+    } catch (...) { return false; }
 }
 
 bool ExtractFilesystemPath(IShellItemArray* items, std::wstring& path) noexcept {
@@ -612,8 +690,6 @@ public:
             } else {
                 currentDirectory_.clear();
             }
-        } else if (isRoot_) {
-            currentDirectory_.clear();
         }
         return S_OK;
     }
@@ -713,7 +789,7 @@ public:
     HRESULT Skip(ULONG count) noexcept override {
         const std::size_t remaining = items_.size() - index_;
         index_ += static_cast<ULONG>(std::min<std::size_t>(count, remaining));
-        return index_ < items_.size() ? S_OK : S_FALSE;
+        return count <= remaining ? S_OK : S_FALSE;
     }
 
     HRESULT Reset() noexcept override {
@@ -764,7 +840,7 @@ HRESULT ExplorerCommand::EnumSubCommands(IEnumExplorerCommand** result) noexcept
         if (children_.empty()) {
             // Broker 不可用、路径不可用或响应非法时，始终保留最小可用入口。
             ChildData fallback;
-            fallback.title = L"Open ShellCommand 11";
+            fallback.title = L"设置…";
             fallback.isFallback = true;
             children_.push_back(std::move(fallback));
         }
@@ -813,6 +889,8 @@ HRESULT ExplorerCommand::Invoke(IShellItemArray*, IBindCtx*) noexcept {
 
 class Factory final : public IClassFactory {
 public:
+    Factory() noexcept { ++g_objectCount; }
+    ~Factory() noexcept { --g_objectCount; }
     HRESULT QueryInterface(REFIID iid, void** result) noexcept override {
         if (result == nullptr) {
             return E_POINTER;
