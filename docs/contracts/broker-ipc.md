@@ -1,7 +1,16 @@
-# ShellCommand v2 — broker-ipc
+# Broker IPC v3
 
-本契约以[已确认的完整设计](../redesign-v2.md)为准。仅支持 `version: 2`，不保留旧字段、旧命令行语法或配置迁移。
+配置版本是 v2；本轮完整上下文与递归菜单使用不兼容的 **IPC v3**，三端成套替换，不保留旧协议。
 
-安装根固定为 `%LOCALAPPDATA%\ShellCommand11`，config 与 runner 分离。Core 是不可变数据、条件、变量与执行计划；准备进程处理 YAML/目录/图标；Broker 的 Resolve 只读取内存，Invoke 入队后立即 ACK；用户动作在独立执行进程中运行；native 仅上下文、限时 IPC 和 COM 菜单映射。
+命名空间含当前用户 SID 和 SessionId；服务端仅当前用户可连。二进制帧固定 16 字节头：SC11 magic、u16 version、u16 message type、u32 request ID、u32 payload bytes，均小端。正文上限 256 KiB；字符串为 u32 UTF-8 字节数加严格 UTF-8 数据，不接受 NUL。
 
-用户已要求继续完成整体编码。实机检查是发布验收门槛，不阻塞后续开发。当前实现进度和实机检查见 `docs/p0-validation.md`；历史实现不构成兼容承诺。
+- Ping 1/2：请求为空，响应为运行根字符串。
+- Resolve 10/11：目录字符串（空为 absent）、u16 选择数、逐项 u8 类型（0 文件/1 文件夹）与路径字符串。最多 256 项。
+- Invoke 20/21：16 字节单次 token；立即响应接受/过期/不存在/忙等状态，不等待用户进程结束。
+- Refresh 30/31：目录字符串，异步失效并重新准备，响应为空。
+
+Resolve 响应为 u8 状态、递归节点数组。数组以 u16 数量开头，每项含 u8 kind（0 动作/1 分隔/2 分组）、u8 flags、u16 reserved=0、16 字节 token、标题字符串、图标字符串、子数组。动作 token 非零；分组和分隔为零；只有分组可有非空子数组。图标仅是准备好的本地 ico 引用。
+
+客户端校验版本、请求 ID、长度、UTF-8、枚举、层级和总节点数。原生绝对 30ms 预算覆盖工作入队至解析；最多 8 个 pending 工作。超时不释放尚未完成 I/O 所属的资源，也不在菜单线程等待取消回收。Broker 最多 16 条并发连接，单连接读取有截止。
+
+Resolve 只读内存。准备队列 64 / 并发 2 / 单次约 2 秒；最近快照 128 且总估算内存 32 MiB；watcher 32；单计划字符预算 128 Ki；token 4096、2 分钟、总字符预算 16 Mi；执行队列 32。token 在入队时只消费一次，ACK 丢失不重执行。

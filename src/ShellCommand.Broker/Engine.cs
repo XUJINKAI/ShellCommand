@@ -50,7 +50,7 @@ public sealed class BrokerEngine : IBrokerEndpoint, IDisposable
             await foreach (var plan in _actions.Reader.ReadAllAsync(_stop.Token).ConfigureAwait(false))
             {
                 try { await _executor.ExecuteAsync(plan, _stop.Token).ConfigureAwait(false); }
-                catch (Exception ex) when (ex is IOException or InvalidOperationException or OperationCanceledException or System.ComponentModel.Win32Exception) { }
+                catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or OperationCanceledException or System.ComponentModel.Win32Exception) { }
             }
         }
         catch (OperationCanceledException) { }

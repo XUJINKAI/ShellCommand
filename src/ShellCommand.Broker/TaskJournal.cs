@@ -21,7 +21,7 @@ public static class TaskJournal
         var records = new List<TaskRecord>();
         foreach (var path in Directory.EnumerateFiles(Folder, "*.json").Take(250))
             try { var record = JsonSerializer.Deserialize<TaskRecord>(Preparation.ReadText(path, 65536)); if (record is not null) records.Add(record); }
-            catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException) { }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or JsonException or UnauthorizedAccessException) { }
         return records.OrderByDescending(r => r.Created).Take(200).ToArray();
     }
 }

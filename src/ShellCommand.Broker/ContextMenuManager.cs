@@ -77,7 +77,7 @@ public sealed class ContextMenuScanner
             }
             finally { if (!process.HasExited) process.Kill(true); }
         }
-        catch (Exception ex) when (ex is IOException or InvalidOperationException or OperationCanceledException or JsonException or System.ComponentModel.Win32Exception)
+        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or OperationCanceledException or JsonException or System.ComponentModel.Win32Exception)
         {
             return [new("packaged-diagnostic", "现代菜单扫描不可用：" + ex.Message, MenuEntryType.SystemUnknown, MenuScope.Other, MenuEntryState.ReadOnly, "Windows", "", null, null, false)];
         }
@@ -161,7 +161,7 @@ public sealed class ContextMenuManager
             WriteJournal(record with { Committed = true });
             return new(true, "已禁用；资源管理器可能需要重新启动。", true);
         }
-        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or JsonException or InvalidOperationException or ArgumentException)
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or InvalidDataException or JsonException or InvalidOperationException or ArgumentException)
         { return new(false, "未完成修改：" + ex.Message); }
     }
 
@@ -185,7 +185,7 @@ public sealed class ContextMenuManager
             WriteJournal(record with { Restored = true });
             return new(true, "已恢复；资源管理器可能需要重新启动。", true);
         }
-        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or JsonException or InvalidOperationException or ArgumentException)
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or InvalidDataException or JsonException or InvalidOperationException or ArgumentException)
         { return new(false, "未完成恢复：" + ex.Message); }
     }
     private FileStream Lock()
@@ -212,8 +212,11 @@ public sealed class ContextMenuManager
     private void WriteJournal(JournalRecord record)
     {
         var all = ReadJournal().Where(x => x.OperationId != record.OperationId).Append(record).ToArray();
+        var json = JsonSerializer.Serialize(all, JournalJsonOptions);
+        if (all.Length > 4096 || Encoding.UTF8.GetByteCount(json) > 4 * 1024 * 1024)
+            throw new InvalidOperationException("恢复记录已达到容量限制，请先归档记录；未修改注册表。");
         var temp = _journalPath + ".tmp";
-        File.WriteAllText(temp, JsonSerializer.Serialize(all, JournalJsonOptions)); File.Move(temp, _journalPath, true);
+        File.WriteAllText(temp, json); File.Move(temp, _journalPath, true);
     }
     private JournalRecord[] ReadJournal()
     {

@@ -299,6 +299,7 @@ bool ReadUtf8String(const std::vector<std::uint8_t>& payload, std::size_t& posit
         return false;
     }
 
+    if (result.find(L'\0') != std::wstring::npos) return false;
     position += byteLength;
     return true;
 }

@@ -16,6 +16,16 @@ public sealed class PreparationTests : IDisposable
         var bad = Prepare(); Assert.Single(bad.Global.Config!.Menu); Assert.NotEmpty(bad.Global.Diagnostics);
         File.Delete(Config); var deleted = Prepare(); Assert.Null(deleted.Global.Config); Assert.True(deleted.Global.Missing);
     }
+    [Fact] public void OversizedAndInvalidUtf8EditsRetainGoodSource()
+    {
+        File.WriteAllText(Config, "version: 2\nmenu:\n - {id: a, title: A, copy: hello}\n");
+        Prepare();
+        File.WriteAllBytes(Config, [255, 254, 255]);
+        Assert.Single(Prepare().Global.Config!.Menu);
+        File.WriteAllText(Config, new string('x', 256 * 1024 + 1));
+        var snapshot = Prepare();
+        Assert.Single(snapshot.Global.Config!.Menu); Assert.NotEmpty(snapshot.Global.Diagnostics);
+    }
     [Fact] public void IncludesPublishAsOneTreeWithDefinitionRelativePaths()
     {
         var nested = Path.Combine(_root, "config", "menus"); Directory.CreateDirectory(nested);

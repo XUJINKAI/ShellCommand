@@ -79,7 +79,7 @@ public sealed class SnapshotRuntime : IDisposable
                     }
                     Watch(snapshot.WatchPaths ?? [], key);
                 }
-                catch (Exception ex) when (ex is IOException or InvalidOperationException or OperationCanceledException or System.ComponentModel.Win32Exception or JsonException) { }
+                catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or OperationCanceledException or System.ComponentModel.Win32Exception or JsonException) { }
                 finally { _pending.TryRemove(key, out _); }
             }
         }
@@ -145,7 +145,7 @@ public sealed class SnapshotRuntime : IDisposable
                     watcher.Error += (_, _) => RefreshAffected(path, key);
                     watcher.EnableRaisingEvents = true; _watchers.Add(path, watcher);
                 }
-                catch (Exception ex) when (ex is IOException or ArgumentException or UnauthorizedAccessException) { }
+                catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException or UnauthorizedAccessException) { }
             }
         }
     }

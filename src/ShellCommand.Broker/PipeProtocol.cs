@@ -72,6 +72,7 @@ public static class PipeProtocol
         offset += 4;
         if (length > MaxStringBytes || length > (uint)(payload.Length - offset)) throw new InvalidDataException("Invalid string length.");
         var value = new UTF8Encoding(false, true).GetString(payload.Slice(offset, (int)length));
+        if (value.Contains('\0')) throw new InvalidDataException("Embedded NUL in string.");
         offset += (int)length;
         return value;
     }

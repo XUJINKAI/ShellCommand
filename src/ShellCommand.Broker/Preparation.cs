@@ -26,13 +26,13 @@ public static class Preparation
                 var entries = Directory.EnumerateFileSystemEntries(request.Directory).Take(10001).Select(Path.GetFileName).OfType<string>().ToArray();
                 if (entries.Length <= 10000) facts = entries;
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException) { }
         }
         var watchPaths = dependencies.Where(path =>
         {
             if (!OperatingSystem.IsWindows()) return false;
             try { return !path.StartsWith(@"\\", StringComparison.Ordinal) && new DriveInfo(Path.GetPathRoot(path)!).DriveType == DriveType.Fixed; }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { return false; }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException) { return false; }
         }).ToArray();
         if (request.EditorPath is null)
         {
@@ -54,7 +54,7 @@ public static class Preparation
                 if (++count > maxFiles || bytes > maxBytes) try { file.Delete(); } catch (IOException) { }
             }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException) { }
     }
     private static SourceSnapshot LoadSource(string root, PrepareRequest request, HashSet<string> dependencies)
     {
@@ -65,10 +65,11 @@ public static class Preparation
         try
         {
             saved = JsonSerializer.Deserialize<PersistedSource>(ReadText(cache, 8 * 1024 * 1024));
+            if (saved is not null && (saved.Texts is null || saved.Diagnostics is null)) throw new InvalidDataException("缓存缺少必要字段。");
             if (saved?.Version == 2) { if (saved.Texts.Count != 0) good = BuildTree(root, saved.Texts, dependencies); }
             else saved = null;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException or DecoderFallbackException) { saved = null; }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or InvalidOperationException or DecoderFallbackException) { saved = null; }
         var texts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var hash = "";
         try
@@ -80,7 +81,7 @@ public static class Preparation
                 {
                     dependencies.Add(pair.Key);
                     try { if (ReadConfig(pair.Key, request) != pair.Value) unchanged = false; }
-                    catch (Exception readError) when (readError is IOException or UnauthorizedAccessException or DecoderFallbackException) { unchanged = false; }
+                    catch (Exception readError) when (readError is IOException or InvalidDataException or UnauthorizedAccessException or DecoderFallbackException) { unchanged = false; }
                 }
                 if (unchanged && Hash(badTexts) == saved.BadHash) return WithIcons(good, saved.Diagnostics, request);
             }
@@ -105,13 +106,13 @@ public static class Preparation
             if (request.EditorPath is null) Save(cache, new(2, texts, null, []));
             return WithIcons(model, [], request);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or JsonException or DecoderFallbackException)
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException or JsonException or DecoderFallbackException)
         {
             var diagnostics = ex is ConfigFailure failure ? failure.Diagnostics : new[] { new Diagnostic(root, DiagnosticSeverity.Error, "CONFIG_READ", ex.Message) };
             if (request.EditorPath is null && texts.Count != 0 && ex is ConfigFailure)
             {
                 try { Save(cache, new(2, saved?.Texts ?? new(), Hash(texts), diagnostics, texts)); }
-                catch (Exception saveError) when (saveError is IOException or UnauthorizedAccessException) { }
+                catch (Exception saveError) when (saveError is IOException or InvalidDataException or UnauthorizedAccessException) { }
             }
             return WithIcons(good, diagnostics, request);
         }
@@ -179,7 +180,7 @@ public static class Preparation
                     var reference = IconCache.Prepare(icon, node.SourcePath, request.DataDirectory, request.AppDirectory);
                     icon = new(File: reference);
                 }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception) { icon = null; diagnostics.Add(new(node.SourcePath, DiagnosticSeverity.Warning, "ICON", ex.Message, Field: node.Id + ".icon")); }
+                catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception) { icon = null; diagnostics.Add(new(node.SourcePath, DiagnosticSeverity.Warning, "ICON", ex.Message, Field: node.Id + ".icon")); }
             }
             return node with { Icon = icon, Items = node.Items?.Select(Map).ToArray() };
         }
