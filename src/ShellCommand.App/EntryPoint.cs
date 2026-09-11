@@ -1,3 +1,7 @@
+using System.Text.Json;
+using System.Windows;
+using ShellCommand.Broker;
+
 namespace ShellCommand.App;
 
 public static class EntryPoint
@@ -24,6 +28,31 @@ public static class EntryPoint
             catch (Exception) { return 1; }
         }
         var application = new App();
-        return application.Run();
+        application.InitializeComponent();
+        if (args.Contains("--execute", StringComparer.Ordinal))
+        {
+            ExecutionRequest request;
+            try
+            {
+                var json = SnapshotRuntime.ReadBoundedAsync(Console.In, 2 * 1024 * 1024, CancellationToken.None).GetAwaiter().GetResult();
+                request = JsonSerializer.Deserialize<ExecutionRequest>(json) ?? throw new InvalidOperationException("执行请求为空。");
+            }
+            catch (Exception ex) { Console.Error.WriteLine(ex.Message); return 1; }
+            if (request.Plan.Actions.Any(a => a.Kind == "settings"))
+            {
+                TaskJournal.Save(new(request.Id, request.Plan.Title, "launched", DateTimeOffset.UtcNow));
+                return application.Run(new MainWindow());
+            }
+            if (request.Plan.Actions.Any(a => a.Output == "window")) return application.Run(new TaskWindow(request));
+            application.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            application.Startup += async (_, _) =>
+            {
+                var result = await new TaskRunner().RunAsync(request, _ => { });
+                if (result.Status == "failed") MessageBox.Show(result.Message, request.Plan.Title, MessageBoxButton.OK, MessageBoxImage.Error);
+                application.Shutdown(result.Status == "failed" ? 1 : 0);
+            };
+            return application.Run();
+        }
+        return application.Run(new MainWindow());
     }
 }

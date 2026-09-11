@@ -1,74 +1,53 @@
-<Window x:Class="ShellCommand.App.MainWindow"
-        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="ShellCommand 11"
-        Width="760" Height="520" MinWidth="620" MinHeight="440"
-        WindowStartupLocation="CenterScreen">
-  <Grid Margin="28">
-    <Grid.RowDefinitions>
-      <RowDefinition Height="Auto" />
-      <RowDefinition Height="Auto" />
-      <RowDefinition Height="*" />
-      <RowDefinition Height="Auto" />
-    </Grid.RowDefinitions>
-
-    <TextBlock FontSize="28" FontWeight="SemiBold">ShellCommand 11</TextBlock>
-    <TextBlock Grid.Row="1" Margin="0,6,0,22" Foreground="#666666" Text="让常用命令出现在 Windows 11 右键菜单中" />
-
-    <Border Grid.Row="2" Padding="20" Background="#F5F7FA" CornerRadius="10" BorderBrush="#E1E5EA" BorderThickness="1">
-      <Grid>
-        <Grid.RowDefinitions>
-          <RowDefinition Height="Auto" />
-          <RowDefinition Height="Auto" />
-          <RowDefinition Height="*" />
-          <RowDefinition Height="Auto" />
-        </Grid.RowDefinitions>
-
-        <DockPanel>
-          <TextBlock x:Name="StatusTitle" FontSize="21" FontWeight="SemiBold" DockPanel.Dock="Left" />
-          <Button Content="刷新状态" Padding="12,5" Click="Refresh_Click" DockPanel.Dock="Right" />
-        </DockPanel>
-        <TextBlock x:Name="StatusMessage" Grid.Row="1" Margin="0,8,0,18" Foreground="#555555" TextWrapping="Wrap" />
-
-        <Grid Grid.Row="2">
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="190" />
-            <ColumnDefinition Width="*" />
-          </Grid.ColumnDefinitions>
-          <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
-          </Grid.RowDefinitions>
-          <TextBlock Text="Windows 右键菜单" Foreground="#666666" Margin="0,0,0,10" />
-          <TextBlock x:Name="PackageStatus" Grid.Column="1" Margin="0,0,0,10" />
-          <TextBlock Text="后台服务" Grid.Row="1" Foreground="#666666" Margin="0,0,0,10" />
-          <TextBlock x:Name="BrokerStatus" Grid.Row="1" Grid.Column="1" Margin="0,0,0,10" />
-          <TextBlock Text="开机启动" Grid.Row="2" Foreground="#666666" Margin="0,0,0,10" />
-          <TextBlock x:Name="AutoStartStatus" Grid.Row="2" Grid.Column="1" Margin="0,0,0,10" />
-          <TextBlock Text="程序文件" Grid.Row="3" Foreground="#666666" />
-          <TextBlock x:Name="FilesStatus" Grid.Row="3" Grid.Column="1" />
-        </Grid>
-
-        <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,22,0,0">
-          <Button x:Name="InstallButton" Content="安装 / 修复" Padding="18,8" Click="Install_Click" />
-          <Button x:Name="UninstallButton" Content="卸载" Padding="18,8" Margin="10,0,0,0" Click="Uninstall_Click" />
-          <Button x:Name="RestartButton" Content="重启 Explorer" Padding="18,8" Margin="10,0,0,0" Click="RestartExplorer_Click" />
-        </StackPanel>
+<Window x:Class="ShellCommand.App.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ Title="ShellCommand" Width="1140" Height="800" MinWidth="900" MinHeight="640" WindowStartupLocation="CenterScreen">
+ <Grid Margin="28,22">
+  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+  <DockPanel Margin="0,0,0,20">
+   <Border Background="#355BE8" CornerRadius="10" Padding="12,9" Margin="0,0,14,0"><TextBlock Text="SC" FontSize="22" Foreground="White" FontWeight="Bold"/></Border>
+   <StackPanel><TextBlock Text="ShellCommand" FontSize="26" FontWeight="SemiBold"/><TextBlock Text="把常用操作，放在顺手的位置。" Foreground="#788298" Margin="0,3,0,0"/></StackPanel>
+   <TextBlock x:Name="IntegrationBadge" Text="正在读取状态…" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="#65728C"/>
+  </DockPanel>
+  <TabControl Grid.Row="1" Background="Transparent" BorderThickness="0">
+   <TabItem Header="菜单">
+    <Grid Margin="0,16,0,0">
+     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="150"/></Grid.RowDefinitions>
+     <DockPanel Margin="0,0,0,12">
+      <StackPanel Orientation="Horizontal" DockPanel.Dock="Right"><Button Content="全局" Click="Global_Click"/><Button Content="目录配置" Margin="8,0,0,0" Click="Local_Click"/><Button Content="重新载入" Margin="8,0,0,0" Click="Reload_Click"/><Button Content="保存" Margin="8,0,0,0" Click="Save_Click" Background="#E9EEFF"/></StackPanel>
+      <TextBlock x:Name="SourceLabel" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="0,0,12,0" Foreground="#53617A"/>
+     </DockPanel>
+     <Grid Grid.Row="1">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="3*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="2*"/></Grid.ColumnDefinitions>
+      <TextBox x:Name="Editor" AcceptsReturn="True" AcceptsTab="True" VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Cascadia Mono, Consolas" FontSize="14" Padding="16" TextChanged="Editor_Changed"/>
+      <GridSplitter Grid.Column="1" Width="5" HorizontalAlignment="Center" Background="Transparent"/>
+      <Grid Grid.Column="2">
+       <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="130"/></Grid.RowDefinitions>
+       <TextBlock Text="菜单预览" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10"/>
+       <DockPanel Grid.Row="1"><Button DockPanel.Dock="Right" Content="目录…" Click="Folder_Click" Margin="8,0,0,0"/><TextBox x:Name="PreviewDirectory" ToolTip="背景目录；跨目录选择时可留空"/></DockPanel>
+       <DockPanel Grid.Row="2" Margin="0,8,0,10"><Button DockPanel.Dock="Right" Content="预览" Click="Preview_Click" Background="#E9EEFF"/><Button Content="选择文件…" Click="SelectFiles_Click" Margin="0,0,8,0"/><Button Content="选文件夹…" Click="SelectFolder_Click" Margin="0,0,8,0"/><Button Content="清空选择" Click="ClearSelection_Click"/></DockPanel>
+       <TreeView x:Name="PreviewTree" Grid.Row="3" BorderBrush="#DCE1EC" Padding="12" SelectedItemChanged="Preview_Selected"/>
+       <TextBox x:Name="PlanDetails" Grid.Row="4" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="11" Margin="0,10,0,0" ToolTip="所选动作的实际程序、参数与工作目录；预览不会执行命令"/>
       </Grid>
-    </Border>
-
-    <Grid Grid.Row="3" Margin="0,18,0,0">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="*" />
-        <ColumnDefinition Width="Auto" />
-      </Grid.ColumnDefinitions>
-      <StackPanel Orientation="Horizontal">
-        <Button Content="打开全局配置" Padding="12,6" Click="OpenGlobalConfig_Click" />
-        <Button Content="打开配置目录" Padding="12,6" Margin="8,0,0,0" Click="OpenConfigFolder_Click" />
-      </StackPanel>
-      <TextBlock Grid.Column="1" VerticalAlignment="Center" Foreground="#888888" Text="v2 开发预览 · P0" />
+     </Grid>
+     <Grid Grid.Row="2" Margin="0,14,0,0"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions><TextBlock x:Name="ValidationTitle" Text="诊断 · 点击预览查看匹配条件及实际参数" FontWeight="SemiBold" Margin="0,0,0,8"/><ListBox x:Name="DiagnosticsList" Grid.Row="1" FontSize="12"/></Grid>
     </Grid>
-  </Grid>
+   </TabItem>
+   <TabItem Header="系统菜单">
+    <DockPanel Margin="0,16,0,0">
+     <StackPanel DockPanel.Dock="Top"><TextBlock Text="查看菜单来源，管理可恢复的当前用户设置。" Foreground="#65728C"/><TextBlock Text="现代打包菜单只读；阻止一个 COM 扩展可能影响它注册的多个位置。" Foreground="#65728C" Margin="0,5,0,12"/>
+      <StackPanel Orientation="Horizontal" Margin="0,0,0,12"><Button Content="扫描" Click="Scan_Click"/><Button Content="禁用" Click="DisableMenu_Click" Margin="8,0,0,0"/><Button Content="恢复" Click="RestoreMenu_Click" Margin="8,0,0,0"/></StackPanel></StackPanel>
+     <TextBox x:Name="SystemDetails" DockPanel.Dock="Bottom" Height="120" IsReadOnly="True" TextWrapping="Wrap" Margin="0,12,0,0" VerticalScrollBarVisibility="Auto"/>
+     <ListBox x:Name="SystemMenus" DisplayMemberPath="DisplayName" SelectionChanged="SystemMenu_Selected"/>
+    </DockPanel>
+   </TabItem>
+   <TabItem Header="设置与任务">
+    <Grid Margin="0,16,0,0"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+     <Border Background="White" CornerRadius="9" Padding="20" BorderBrush="#DCE1EC" BorderThickness="1"><StackPanel><TextBlock x:Name="StatusTitle" FontSize="21" FontWeight="SemiBold"/><TextBlock x:Name="StatusMessage" TextWrapping="Wrap" Foreground="#65728C" Margin="0,8,0,16"/><StackPanel Orientation="Horizontal"><Button x:Name="InstallButton" Content="启用 / 修复" Click="Install_Click"/><Button x:Name="UninstallButton" Content="卸载" Click="Uninstall_Click" Margin="8,0,0,0"/><Button Content="刷新状态" Click="Refresh_Click" Margin="8,0,0,0"/><Button Content="重启资源管理器" Click="RestartExplorer_Click" Margin="8,0,0,0"/></StackPanel></StackPanel></Border>
+     <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,16,0,18"><Button Content="打开配置目录" Click="OpenConfigFolder_Click"/><Button Content="打开记录目录" Click="OpenStateFolder_Click" Margin="8,0,0,0"/></StackPanel>
+     <DockPanel Grid.Row="2" Margin="0,0,0,10"><Button DockPanel.Dock="Right" Content="刷新任务" Click="Tasks_Click"/><TextBlock Text="最近任务" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center"/></DockPanel>
+     <ListBox x:Name="TasksList" Grid.Row="3"/>
+    </Grid>
+   </TabItem>
+  </TabControl>
+  <TextBlock x:Name="Notice" Grid.Row="2" Foreground="#65728C" Margin="0,14,0,0" Text="配置 v2 · 配置错误不会替换已生效的菜单" TextTrimming="CharacterEllipsis"/>
+ </Grid>
 </Window>

@@ -105,7 +105,7 @@ public sealed class InstallationManager
             if (!developerRegistration && !File.Exists(Path.Combine(target, "ShellCommand.Identity.msix")))
                 throw new InvalidOperationException("本开发构建未附带签名身份包，不能正式启用。开发测试请使用 --developer-install；不会自动打开 Windows 开发者模式。");
             foreach (var folder in new[] { "config", "state", "cache", "logs", "temp" }) Directory.CreateDirectory(Path.Combine(DeploymentPackage.DataRoot, folder));
-            // P0 deliberately does not generate a legacy template. P1 installs a v2 template.
+            if (!File.Exists(GlobalConfigPath)) File.WriteAllText(GlobalConfigPath, DefaultConfiguration.Text, new UTF8Encoding(false));
             StopInstalledBroker();
             registrationAttempted = true;
             await UnregisterAsync(cancellationToken).ConfigureAwait(false);

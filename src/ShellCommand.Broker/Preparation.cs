@@ -5,7 +5,7 @@ using ShellCommand.Config.Yaml;
 using ShellCommand.Core;
 namespace ShellCommand.Broker;
 
-public sealed record PrepareRequest(string? Directory, string DataDirectory, string AppDirectory);
+public sealed record PrepareRequest(string? Directory, string DataDirectory, string AppDirectory, string? EditorPath = null, string? EditorText = null);
 public sealed record PersistedSource(int Version, Dictionary<string, string> Texts, string? BadHash, IReadOnlyList<Diagnostic> Diagnostics);
 
 public static class Preparation
@@ -47,35 +47,36 @@ public static class Preparation
         var hash = "";
         try
         {
-            try { texts[root] = ReadText(root, ConfigParser.MaxFileBytes); }
+            try { texts[root] = ReadConfig(root, request); }
             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
             {
                 // External editors often replace a file via rename. Confirm disappearance.
                 Thread.Sleep(180);
-                try { texts[root] = ReadText(root, ConfigParser.MaxFileBytes); }
+                try { texts[root] = ReadConfig(root, request); }
                 catch (Exception missing) when (missing is FileNotFoundException or DirectoryNotFoundException)
                 {
-                    File.Delete(cache);
+                    if (request.EditorPath is null) File.Delete(cache);
                     return new(null, [], true);
                 }
             }
             // Read includes as a graph; all files publish as one source transaction.
             var total = Encoding.UTF8.GetByteCount(texts[root]);
-            ReadIncludes(root, texts, dependencies, ref total);
+            ReadIncludes(root, texts, dependencies, ref total, request);
             hash = Hash(texts);
             if (saved is not null && saved.BadHash == hash) return new(PrepareIcons(good, request), saved.Diagnostics);
             var model = BuildTree(root, texts, dependencies);
-            Save(cache, new(2, texts, null, []));
+            if (request.EditorPath is null) Save(cache, new(2, texts, null, []));
             return new(PrepareIcons(model, request), []);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or JsonException)
         {
             var diagnostics = ex is ConfigFailure failure ? failure.Diagnostics : new[] { new Diagnostic(root, DiagnosticSeverity.Error, "CONFIG_READ", ex.Message) };
-            if (hash.Length != 0 && saved is not null) Save(cache, saved with { BadHash = hash, Diagnostics = diagnostics });
+            if (request.EditorPath is null && hash.Length != 0 && saved is not null) Save(cache, saved with { BadHash = hash, Diagnostics = diagnostics });
             return new(PrepareIcons(good, request), diagnostics);
         }
     }
-    private static void ReadIncludes(string path, Dictionary<string, string> texts, HashSet<string> dependencies, ref int total)
+    private static string ReadConfig(string path, PrepareRequest request) => string.Equals(path, request.EditorPath, StringComparison.OrdinalIgnoreCase) ? request.EditorText ?? "" : ReadText(path, ConfigParser.MaxFileBytes);
+    private static void ReadIncludes(string path, Dictionary<string, string> texts, HashSet<string> dependencies, ref int total, PrepareRequest request)
     {
         var result = ConfigParser.Parse(texts[path], path);
         if (!result.IsValid) throw new ConfigFailure(result.Diagnostics);
@@ -84,11 +85,11 @@ public static class Preparation
             var child = Path.GetFullPath(include, Path.GetDirectoryName(path)!);
             dependencies.Add(child);
             if (texts.Count >= 8 || texts.ContainsKey(child)) throw new InvalidOperationException("include 循环、重复引用或超过 8 个文件。");
-            var text = ReadText(child, ConfigParser.MaxFileBytes);
+            var text = ReadConfig(child, request);
             total += Encoding.UTF8.GetByteCount(text);
             if (total > 1024 * 1024) throw new InvalidOperationException("include 总量超过 1 MiB。");
             texts.Add(child, text);
-            ReadIncludes(child, texts, dependencies, ref total);
+            ReadIncludes(child, texts, dependencies, ref total, request);
         }
     }
     public static MenuConfig BuildTree(string root, IReadOnlyDictionary<string, string> texts, HashSet<string>? dependencies = null)
