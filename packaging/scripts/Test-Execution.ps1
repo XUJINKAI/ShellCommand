@@ -2,7 +2,7 @@ param([string]$Directory, [string]$Probe)
 $ErrorActionPreference = 'Stop'
 $app = Join-Path (Resolve-Path $Directory) 'ShellCommand.exe'
 $probePath = (Resolve-Path $Probe).Path
-$root = Join-Path $env:TEMP ('sc-execution-' + [guid]::NewGuid().ToString('N'))
+$root = Join-Path $env:LOCALAPPDATA ('sc-execution-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $root | Out-Null
 $ids = @()
 function Invoke-Plan($actions) {
@@ -62,7 +62,7 @@ menu:
     Invoke-Plan @(@{ Kind='run'; Exe=$probePath; Args=$expected; Cwd=$root; Output='hidden'; Env=@{ SC_PROBE_DEST=$destination; SC_PROBE_VALUE='literal & 中文' } })
     $actual = Get-Content $destination -Raw | ConvertFrom-Json
     if (($actual.Args | ConvertTo-Json -Compress) -cne ($expected | ConvertTo-Json -Compress)) { throw ("Arguments were changed. Expected: " + ($expected | ConvertTo-Json -Compress) + " Actual: " + ($actual.Args | ConvertTo-Json -Compress)) }
-    if ($actual.Cwd -ne $root -or $actual.Value -ne 'literal & 中文') { throw 'Cwd or environment changed' }
+    if ($actual.Cwd -ne $root -or $actual.Value -ne 'literal & 中文') { throw ("Cwd or environment changed. Expected cwd: " + $root + " Actual: " + ($actual | ConvertTo-Json -Compress)) }
     $literal = Join-Path $root 'script.txt'
     $scriptText = '[IO.File]::WriteAllText($env:SC_PROBE_DEST, ''${directory}'')'
     Invoke-Plan @(@{ Kind='script'; Shell='powershell'; Cwd=$root; Output='hidden'; Text=$scriptText; Env=@{ SC_PROBE_DEST=$literal } })
