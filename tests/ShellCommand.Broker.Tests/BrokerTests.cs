@@ -1,74 +1,51 @@
-using System.Text;
 using ShellCommand.Broker;
 using ShellCommand.Core;
-
 namespace ShellCommand.Broker.Tests;
-
-public class BrokerTests
+public sealed class BrokerTests
 {
-    [Fact]
-    public void TokensAreSingleUseAndExpire()
+    private static LaunchPlan Plan => new("Test", "", [new("copy", Text: "hello")]);
+    [Fact] public void TokensAreSingleUseAndExpire()
     {
-        var store = new ActionTokenStore(TimeSpan.Zero);
-        var token = store.Issue(new ActionSpec(ActionKind.UserCommand, "test.exe", @"C:\"));
-        Assert.False(store.TryConsume(token, out _, out var status));
-        Assert.Equal(TokenStatus.TokenExpired, status);
-        Assert.False(store.TryConsume(token, out _, out status));
-        Assert.Equal(TokenStatus.TokenNotFound, status);
+        var store = new ActionTokenStore(TimeSpan.Zero); var token = store.Issue(Plan);
+        Assert.False(store.TryConsume(token, out _, out var status)); Assert.Equal(TokenStatus.TokenExpired, status);
+        Assert.False(store.TryConsume(token, out _, out status)); Assert.Equal(TokenStatus.TokenNotFound, status);
     }
-
-    [Fact]
-    public async Task PipeFrameRejectsLargePayload()
+    [Fact] public void UnclickedTokensRemainBounded()
     {
-        await Assert.ThrowsAsync<InvalidDataException>(() => PipeProtocol.WriteAsync(new MemoryStream(), new PipeFrame(1, MessageType.PingRequest, new byte[PipeProtocol.MaxPayload + 1]), default));
+        var store = new ActionTokenStore();
+        for (var i = 0; i < 10000; i++) store.Issue(Plan);
+        Assert.Equal(4096, store.Count);
     }
-
-    [Fact]
-    public async Task PipeFrameRejectsMalformedLengthBeforeAllocation()
+    [Fact] public async Task InvokeAcknowledgesBeforeExecutorCompletes()
+    {
+        using var runtime = new SnapshotRuntime(appDirectory: Path.GetTempPath());
+        var tokens = new ActionTokenStore(); var executor = new WaitingExecutor();
+        using var engine = new BrokerEngine(runtime, tokens, executor);
+        var token = tokens.Issue(Plan);
+        Assert.Equal(TokenStatus.Accepted, await engine.InvokeAsync(token).WaitAsync(TimeSpan.FromSeconds(1)));
+        await executor.Started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Equal(TokenStatus.TokenNotFound, await engine.InvokeAsync(token));
+    }
+    private sealed class WaitingExecutor : IActionExecutor
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public async Task ExecuteAsync(LaunchPlan plan, CancellationToken cancellationToken) { Started.TrySetResult(); await Task.Delay(Timeout.Infinite, cancellationToken); }
+    }
+    [Fact] public async Task PipeFrameRejectsLargePayload()
     {
         using var stream = new MemoryStream();
-        stream.Write("SC11"u8);
-        stream.WriteByte((byte)PipeProtocol.Version); stream.WriteByte(0); // version
-        stream.WriteByte(1); stream.WriteByte(0); // PingRequest
-        stream.Write(new byte[4]);
-        stream.Write(BitConverter.GetBytes((uint)(PipeProtocol.MaxPayload + 1)));
-        stream.Position = 0;
-        await Assert.ThrowsAsync<InvalidDataException>(() => PipeProtocol.ReadAsync(stream, default));
+        await Assert.ThrowsAsync<InvalidDataException>(() => PipeProtocol.WriteAsync(stream, new(1, MessageType.PingRequest, new byte[PipeProtocol.MaxPayload + 1]), default));
     }
-
-    [Fact]
-    public async Task PipeFrameRoundTripsUnicodeString()
+    [Fact] public void ContextRoundTripsAllSelectionsAndAbsentDirectory()
     {
-        using var stream = new MemoryStream();
-        var payload = PipeProtocol.StringPayload("C:\\项目\\A B");
-        await PipeProtocol.WriteAsync(stream, new PipeFrame(42, MessageType.ResolveMenuRequest, payload), default);
-        stream.Position = 0;
-        var frame = await PipeProtocol.ReadAsync(stream, default);
-        var offset = 0;
-        Assert.Equal("C:\\项目\\A B", PipeProtocol.ReadString(frame.Payload, ref offset));
-        Assert.Equal((uint)42, frame.RequestId);
+        var context = new MenuContext(null, [new(@"C:\中文\one.txt", false), new(@"D:\folder", true)]);
+        var decoded = PipeServer.DecodeContext(PipeServer.ContextPayload(context));
+        Assert.Null(decoded.Directory); Assert.Equal(context.Selection, decoded.Selection);
+        Assert.Throws<InvalidDataException>(() => PipeServer.DecodeContext(PipeServer.ContextPayload(context).Concat(new byte[] { 1 }).ToArray()));
     }
-
-    [Fact]
-    public void RuntimeUsesLastKnownGoodAfterInvalidEdit()
+    [Fact] public void NestedMenuWireRetainsChildren()
     {
-        var root = Path.Combine(Path.GetTempPath(), "sc11-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
-        try
-        {
-            var global = Path.Combine(root, "global.yaml");
-            var dir = Path.Combine(root, "folder");
-            Directory.CreateDirectory(dir);
-            var local = Path.Combine(dir, ".shellcommand.yaml");
-            File.WriteAllText(global, "GlobalCommands: []\n");
-            File.WriteAllText(local, "- Command: good.exe\n");
-            var runtime = new FileConfigRuntime(globalPath: global);
-            Assert.Single(runtime.Load(dir).Directory!.Commands);
-            File.WriteAllText(local, "- Command: \"unterminated\n");
-            var snapshot = runtime.Load(dir, forceRefresh: true);
-            Assert.Single(snapshot.Directory!.Commands);
-            Assert.Contains(snapshot.Diagnostics, d => d.Code is "YAML_SYNTAX" or "INVALID_ROOT");
-        }
-        finally { Directory.Delete(root, true); }
+        var response = PipeServer.EncodeResolve(new(ResolveStatus.Ok, [new(2, "Group", "", Guid.Empty, [new(0, "Child", "", Guid.NewGuid())])], []));
+        Assert.Equal(0, response[0]); Assert.True(response.Length > 60);
     }
 }

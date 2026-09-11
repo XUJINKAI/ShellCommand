@@ -21,7 +21,7 @@ public sealed class PipeIntegrationTests
             using (var pipe = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous))
             {
                 await pipe.ConnectAsync(timeout.Token);
-                await PipeProtocol.WriteAsync(pipe, new(52, MessageType.ResolveMenuRequest, PipeProtocol.StringPayload(@"C:\Test")), timeout.Token);
+                await PipeProtocol.WriteAsync(pipe, new(52, MessageType.ResolveMenuRequest, PipeServer.ContextPayload(new(@"C:\Test", []))), timeout.Token);
                 var response = await PipeProtocol.ReadAsync(pipe, timeout.Token);
                 Assert.Equal((uint)52, response.RequestId);
                 Assert.Equal(MessageType.ResolveMenuResponse, response.Type);

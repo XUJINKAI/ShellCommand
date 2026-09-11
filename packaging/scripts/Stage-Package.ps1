@@ -26,22 +26,7 @@ foreach ($asset in @{ StoreLogo=50; Square150x150Logo=150; Square44x44Logo=44 }.
         $bitmap.Save("$stage/Assets/$($asset.Key).png", [Drawing.Imaging.ImageFormat]::Png)
     } finally { $graphics.Dispose(); $bitmap.Dispose() }
 }
-@'
-ShellCommand v2 P0 development build
-Requires Windows 11 x64 and .NET 10 Desktop Runtime x64 (not included).
-
-This artifact verifies installation and native IPC failures. YAML v2 and the new
-menu editor are not implemented yet. Do not use it as the completed redesign.
-
-Production installation needs a trusted signed ShellCommand.Identity.msix.
---developer-install explicitly uses manifest registration on a developer machine.
---uninstall / --disable-integration removes integration without loading YAML.
-Uninstall.cmd also works without .NET and does not restart Explorer.
-
-Data: %LOCALAPPDATA%\ShellCommand11\config
-Programs: %LOCALAPPDATA%\ShellCommand11\runner\<build-id>
-Configuration and third-party recovery records are preserved by uninstall.
-'@ | Set-Content "$stage/README.txt" -Encoding utf8
+Copy-Item "$root/README_cn.md" "$stage/README.md"
 $files = @(Get-ChildItem $stage -Recurse -File | Sort-Object FullName | ForEach-Object {
     @{ Path=$_.FullName.Substring($stage.Length+1).Replace('\','/'); Sha256=(Get-FileHash $_.FullName -Algorithm SHA256).Hash }
 })

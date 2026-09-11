@@ -32,8 +32,9 @@ public sealed class ConfigParser
             if (yaml.Documents.Count != 1) throw new InvalidConfig(null, "", "需要且只能有一个 YAML 文档。");
             var parser = new ConfigParser(Path.GetFullPath(sourcePath));
             var root = Map(yaml.Documents[0].RootNode, "root", "version", "include", "menu");
-            if (Str(Get(root, "version"), "version") != "2") throw new InvalidConfig(root, "version", "只支持 version: 2。");
-            var includes = Get(root, "include") is { } include ? Strings(include, "include") : [];
+            if (ScalarValue(Get(root, "version"), "version") != "2") throw new InvalidConfig(root, "version", "只支持 version: 2。");
+            var include = Get(root, "include");
+            var includes = include is not null ? Strings(include, "include") : [];
             foreach (var path in includes)
                 if (path.Length == 0 || path.Contains('*') || path.Contains('?') || path.StartsWith("\\\\", StringComparison.Ordinal) || path.Contains("://", StringComparison.Ordinal))
                     throw new InvalidConfig(include, "include", "include 只能引用固定的本地文件路径。");
@@ -208,10 +209,18 @@ public sealed class ConfigParser
     }
     private static YamlNode? Get(YamlMappingNode map, string key) => map.Children.FirstOrDefault(p => p.Key is YamlScalarNode s && s.Value == key).Value;
     private static YamlSequenceNode Seq(YamlNode? node, string f) => node as YamlSequenceNode ?? throw new InvalidConfig(node, f, "需要数组。");
-    private static string Str(YamlNode? node, string f) => node is YamlScalarNode { Value: { } text } && !text.Contains('\0') ? text : throw new InvalidConfig(node, f, "需要字符串值。");
+    private static string ScalarValue(YamlNode? node, string f) => node is YamlScalarNode { Value: { } text } && !text.Contains('\0') ? text : throw new InvalidConfig(node, f, "需要字符串值。");
+    private static string Str(YamlNode? node, string f)
+    {
+        var text = ScalarValue(node, f);
+        if (node is YamlScalarNode { Style: ScalarStyle.Plain } &&
+            (text is "true" or "false" or "null" or "~" || double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _)))
+            throw new InvalidConfig(node, f, "需要字符串；数字或布尔值作为文本时请加引号。");
+        return text;
+    }
     private static IReadOnlyList<string> Strings(YamlNode node, string f) => Seq(node, f).Children.Select(n => Str(n, f)).ToArray();
-    private static bool Bool(YamlNode node, string f) => Str(node, f) switch { "true" => true, "false" => false, _ => throw new InvalidConfig(node, f, "需要 true 或 false。") };
-    private static int Integer(YamlNode node, string f, int min, int max) => int.TryParse(Str(node, f), out var value) && value >= min && value <= max ? value : throw new InvalidConfig(node, f, $"需要 {min}–{max} 的整数。");
+    private static bool Bool(YamlNode node, string f) => ScalarValue(node, f) switch { "true" => true, "false" => false, _ => throw new InvalidConfig(node, f, "需要 true 或 false。") };
+    private static int Integer(YamlNode node, string f, int min, int max) => int.TryParse(ScalarValue(node, f), out var value) && value >= min && value <= max ? value : throw new InvalidConfig(node, f, $"需要 {min}–{max} 的整数。");
     private static string Choice(YamlNode? node, string f, string fallback, params string[] options)
     {
         var value = node is null ? fallback : Str(node, f);

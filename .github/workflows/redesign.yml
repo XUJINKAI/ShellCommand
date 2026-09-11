@@ -1,4 +1,4 @@
-name: Redesign P0
+name: ShellCommand v2
 on:
   push:
     branches: [feat/redesign-v2]
@@ -56,11 +56,11 @@ jobs:
         shell: pwsh
         run: |
           ./packaging/scripts/Stage-Package.ps1 -Directory artifacts/package
-          ./packaging/scripts/Create-Zip.ps1 -SourceDirectory artifacts/package -Destination artifacts/ShellCommand-v2-P0-win-x64.zip
+          ./packaging/scripts/Create-Zip.ps1 -SourceDirectory artifacts/package -Destination artifacts/ShellCommand-v2-win-x64.zip
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ShellCommand-v2-P0-win-x64
+          name: ShellCommand-v2-win-x64
           path: |
             artifacts/*.zip
             tests/**/TestResults/*.trx

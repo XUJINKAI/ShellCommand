@@ -7,11 +7,13 @@ public static class MenuResolver
         MenuContext context, ResolveEnvironment environment)
     {
         var diagnostics = new List<Diagnostic>();
-        var overrides = (local?.Menu ?? []).Where(m => !m.Separator).Select(m => m.Id).ToHashSet(StringComparer.Ordinal);
+        IEnumerable<MenuDefinition> Flatten(IEnumerable<MenuDefinition> nodes) => nodes.SelectMany(n => new[] { n }.Concat(Flatten(n.Items ?? [])));
+        var overrides = Flatten(local?.Menu ?? []).Where(m => !m.Separator).Select(m => m.Id).ToHashSet(StringComparer.Ordinal);
+        IEnumerable<MenuDefinition> Filter(IEnumerable<MenuDefinition> nodes) => nodes.Where(n => !overrides.Contains(n.Id)).Select(n => n with { Items = n.Items is null ? null : Filter(n.Items).ToArray() });
         var items = new List<ResolvedItem>();
         items.AddRange(ResolveItems(local?.Menu ?? [], facts, context, environment, diagnostics));
         if (items.Count != 0) items.Add(new("separator"));
-        items.AddRange(ResolveItems((global?.Menu ?? []).Where(m => !overrides.Contains(m.Id)), facts, context, environment, diagnostics));
+        items.AddRange(ResolveItems(Filter(global?.Menu ?? []), facts, context, environment, diagnostics));
         if (Count(items) > 100)
         {
             diagnostics.Add(new("", DiagnosticSeverity.Error, "MENU_LIMIT", "合并菜单超过 100 项，请减少命令。"));
