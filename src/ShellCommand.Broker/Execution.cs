@@ -21,8 +21,6 @@ public sealed class ProcessActionExecutor : IActionExecutor
             start.ArgumentList.Add("--execute");
             var process = Process.Start(start) ?? throw new InvalidOperationException("执行进程启动失败。");
             var pid = process.Id; _active[pid] = process;
-            process.EnableRaisingEvents = true;
-            process.Exited += (_, _) => { if (_active.TryRemove(pid, out var completed)) completed.Dispose(); };
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(3));
             try
@@ -30,13 +28,23 @@ public sealed class ProcessActionExecutor : IActionExecutor
                 await process.StandardInput.WriteAsync(JsonSerializer.Serialize(request).AsMemory(), timeout.Token).ConfigureAwait(false);
                 process.StandardInput.Close();
             }
-            catch { try { if (!process.HasExited) process.Kill(); } catch (InvalidOperationException) { } throw; }
-            if (process.HasExited && _active.TryRemove(pid, out var exited)) exited.Dispose();
+            catch
+            {
+                try { if (!process.HasExited) process.Kill(entireProcessTree: true); await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false); }
+                finally { _active.TryRemove(pid, out _); process.Dispose(); }
+                throw;
+            }
+            _ = ReapAsync(pid, process);
         }
         catch (Exception ex)
         {
             TaskJournal.Save(record with { Status = "failed", Message = ex.Message });
             throw;
         }
+    }
+    private async Task ReapAsync(int pid, Process process)
+    {
+        try { await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false); }
+        finally { _active.TryRemove(pid, out _); process.Dispose(); }
     }
 }

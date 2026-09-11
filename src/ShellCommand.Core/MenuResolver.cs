@@ -24,7 +24,7 @@ public static class MenuResolver
         return new(Normalize(items), diagnostics);
     }
     private static int Count(IEnumerable<ResolvedItem> items) => items.Sum(i => 1 + Count(i.Items ?? []));
-    private static IReadOnlyList<ResolvedItem> ResolveItems(IEnumerable<MenuDefinition> definitions, IReadOnlyList<string>? facts,
+    private static List<ResolvedItem> ResolveItems(IEnumerable<MenuDefinition> definitions, IReadOnlyList<string>? facts,
         MenuContext context, ResolveEnvironment environment, List<Diagnostic> diagnostics, bool inheritedContext = false)
     {
         var result = new List<ResolvedItem>();
@@ -54,6 +54,12 @@ public static class MenuResolver
     private static string Icon(MenuDefinition node) => node.Icon?.File ?? node.Icon?.Builtin ?? "";
     public static LaunchPlan BuildPlan(MenuDefinition node, MenuContext context, ResolveEnvironment environment)
     {
+        var plan = BuildPlanCore(node, context, environment);
+        if (PlanLimits.Characters(plan) > PlanLimits.MaxCharacters) throw new InvalidOperationException("展开后的执行计划过大，请减少参数或选择项。");
+        return plan;
+    }
+    private static LaunchPlan BuildPlanCore(MenuDefinition node, MenuContext context, ResolveEnvironment environment)
+    {
         string Expand(string value, SelectionItem? item = null) => VariableExpander.Expand(value, context, node.SourcePath, environment, item);
         string Relative(string value) => Path.IsPathFullyQualified(value) ? value : Path.GetFullPath(value, Path.GetDirectoryName(node.SourcePath)!);
         IReadOnlyDictionary<string, string>? Env(IReadOnlyDictionary<string, string>? values, SelectionItem? item = null)
@@ -63,6 +69,7 @@ public static class MenuResolver
             if (run.Mode == "each" && !context.IsSelection) throw new InvalidOperationException("each 需要选择项。");
             var items = run.Mode == "each" ? context.Selection.Cast<SelectionItem?>() : new SelectionItem?[] { null };
             var actions = new List<LaunchAction>();
+            var characters = 0;
             foreach (var item in items)
             {
                 var exe = Expand(run.Exe, item);
@@ -70,6 +77,8 @@ public static class MenuResolver
                 var cwd = run.Cwd is null ? context.Directory : Relative(Expand(run.Cwd, item));
                 if (cwd is null) throw new InvalidOperationException("缺少目录，请显式设置 cwd。跨目录选择可使用 ${item.parent}。" );
                 actions.Add(new("run", exe, VariableExpander.Arguments(run.Args, context, node.SourcePath, environment, item), cwd, Env(run.Env, item), run.Admin, run.Output));
+                characters += PlanLimits.Characters(actions[^1]);
+                if (characters > PlanLimits.MaxCharacters) throw new InvalidOperationException("展开后的执行计划过大。");
             }
             return new(node.Title, node.SourcePath, actions);
         }
@@ -88,7 +97,8 @@ public static class MenuResolver
         if (node.Open is { } open)
         {
             var target = Expand(open);
-            if (!Uri.TryCreate(target, UriKind.Absolute, out var uri) || uri.IsFile) target = Relative(target);
+            if (!Uri.TryCreate(target, UriKind.Absolute, out var uri)) target = Relative(target);
+            else if (uri.IsFile) target = uri.LocalPath;
             return new(node.Title, node.SourcePath, [new("open", Text: target)]);
         }
         if (node.Copy is { } copy)
@@ -99,7 +109,7 @@ public static class MenuResolver
         }
         throw new InvalidOperationException("没有可执行动作。");
     }
-    private static IReadOnlyList<ResolvedItem> Normalize(IEnumerable<ResolvedItem> items)
+    private static List<ResolvedItem> Normalize(IEnumerable<ResolvedItem> items)
     {
         var result = new List<ResolvedItem>();
         foreach (var item in items)

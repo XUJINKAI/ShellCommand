@@ -61,7 +61,7 @@ public sealed class ConfigParser
             if (current is Scalar scalar && scalar.Value.Length > 32768) throw new YamlException(current.Start, current.End, "单值超过 32768 字符。");
         }
     }
-    private IReadOnlyList<MenuDefinition> Menu(YamlNode? node, string field, int depth)
+    private List<MenuDefinition> Menu(YamlNode? node, string field, int depth)
     {
         if (depth > 2) throw new InvalidConfig(node, field, "最多两层自定义分组。");
         var sequence = Seq(node, field);
@@ -120,7 +120,7 @@ public sealed class ConfigParser
         var env = EnvironmentMap(Get(map, "env"), f + ".env", false);
         return new(shell, text, cwd, env, Choice(Get(map, "output"), f + ".output", "normal", "normal", "hidden", "window"));
     }
-    private static IReadOnlyDictionary<string, string>? EnvironmentMap(YamlNode? node, string f, bool each)
+    private static Dictionary<string, string>? EnvironmentMap(YamlNode? node, string f, bool each)
     {
         if (node is null) return null;
         var map = Map(node, f);
@@ -171,7 +171,7 @@ public sealed class ConfigParser
         }
         var selection = Map(value, f, "types", "count", "extensions");
         var types = Get(selection, "types") is { } typesNode ? Strings(typesNode, f + ".types") : null;
-        if (types is not null && (types.Count == 0 || types.Any(t => t is not ("file" or "folder")))) throw new InvalidConfig(value, f, "types 只能包含 file/folder。");
+        if (types is not null && (types.Length == 0 || types.Any(t => t is not ("file" or "folder")))) throw new InvalidConfig(value, f, "types 只能包含 file/folder。");
         var min = 1; var max = 256;
         if (Get(selection, "count") is { } count)
         {
@@ -180,7 +180,7 @@ public sealed class ConfigParser
             if (Get(range, "max") is { } hi) max = Integer(hi, f, min, 256);
         }
         var extensions = Get(selection, "extensions") is { } extensionsNode ? Strings(extensionsNode, f + ".extensions") : null;
-        if (extensions is not null && (extensions.Count == 0 || extensions.Any(e => !e.StartsWith('.') || e.Contains('/') || e.Contains('\\')))) throw new InvalidConfig(value, f, "扩展名需要以 . 开头。");
+        if (extensions is not null && (extensions.Length == 0 || extensions.Any(e => !e.StartsWith('.') || e.Contains('/') || e.Contains('\\')))) throw new InvalidConfig(value, f, "扩展名需要以 . 开头。");
         return new(op, Selection: new(types, min, max, extensions));
     }
     private static string Template(YamlNode? node, string f, bool list = false, bool each = false)
@@ -218,7 +218,7 @@ public sealed class ConfigParser
             throw new InvalidConfig(node, f, "需要字符串；数字或布尔值作为文本时请加引号。");
         return text;
     }
-    private static IReadOnlyList<string> Strings(YamlNode node, string f) => Seq(node, f).Children.Select(n => Str(n, f)).ToArray();
+    private static string[] Strings(YamlNode node, string f) => Seq(node, f).Children.Select(n => Str(n, f)).ToArray();
     private static bool Bool(YamlNode node, string f) => ScalarValue(node, f) switch { "true" => true, "false" => false, _ => throw new InvalidConfig(node, f, "需要 true 或 false。") };
     private static int Integer(YamlNode node, string f, int min, int max) => int.TryParse(ScalarValue(node, f), out var value) && value >= min && value <= max ? value : throw new InvalidConfig(node, f, $"需要 {min}–{max} 的整数。");
     private static string Choice(YamlNode? node, string f, string fallback, params string[] options)

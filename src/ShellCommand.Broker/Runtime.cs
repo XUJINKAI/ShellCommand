@@ -26,7 +26,7 @@ public sealed class SnapshotRuntime : IDisposable
         _appDirectory = appDirectory ?? AppContext.BaseDirectory;
         _brokerPath = Path.Combine(_appDirectory, "ShellCommand.Broker.exe");
         _environment = new(_appDirectory, _dataDirectory, Environment.GetEnvironmentVariables().Cast<System.Collections.DictionaryEntry>()
-            .ToDictionary(p => (string)p.Key, p => (string)p.Value!, StringComparer.OrdinalIgnoreCase));
+            .GroupBy(p => (string)p.Key, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => (string)g.Last().Value!, StringComparer.OrdinalIgnoreCase));
         _ = Task.Run(WorkerAsync); _ = Task.Run(WorkerAsync);
         Request("");
     }
@@ -108,7 +108,7 @@ public sealed class SnapshotRuntime : IDisposable
             try { await error.ConfigureAwait(false); } catch (OperationCanceledException) { }
         }
     }
-    public static async Task<string> ReadBoundedAsync(StreamReader reader, int limit, CancellationToken cancellationToken)
+    public static async Task<string> ReadBoundedAsync(TextReader reader, int limit, CancellationToken cancellationToken)
     {
         var output = new StringBuilder(); var buffer = new char[4096];
         while (true)
@@ -124,6 +124,7 @@ public sealed class SnapshotRuntime : IDisposable
         // Watchers are a bounded optimization; next-menu age checks handle missed events.
         lock (_gate)
         {
+            if (_stop.IsCancellationRequested) return;
             foreach (var path in dependencies)
             {
                 if (!path.StartsWith(Path.Combine(_dataDirectory, "config") + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || _watchers.ContainsKey(path) || _watchers.Count >= 32) continue;
@@ -135,7 +136,7 @@ public sealed class SnapshotRuntime : IDisposable
                     watcher.Renamed += (_, _) => Refresh(key);
                     watcher.EnableRaisingEvents = true; _watchers.Add(path, watcher);
                 }
-                catch (Exception ex) when (ex is IOException or ArgumentException) { }
+                catch (Exception ex) when (ex is IOException or ArgumentException or UnauthorizedAccessException) { }
             }
         }
     }

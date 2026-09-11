@@ -13,6 +13,7 @@ namespace ShellCommand.App;
 
 public partial class MainWindow : Window
 {
+    private static readonly JsonSerializerOptions PreviewJson = new() { WriteIndented = true };
     private readonly InstallationManager _installation = new();
     private readonly ContextMenuManager _menus = new();
     private string _source = InstallationManager.GlobalConfigPath;
@@ -23,7 +24,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         PreviewDirectory.Text = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        Loaded += async (_, _) => await RunUi(async () => { await LoadEditor(); await RefreshStatus(); await Preview(); await LoadTasks(); });
+        Loaded += async (_, _) => await RunUi(async () => { await LoadEditor(); await Preview(); await LoadTasks(); await RefreshStatus(); });
         Closing += (_, e) => { if (Dirty() && MessageBox.Show(this, "还有未保存的修改，直接关闭？", "ShellCommand", MessageBoxButton.YesNo) != MessageBoxResult.Yes) e.Cancel = true; };
     }
     private bool Dirty() => Editor.Text != (_baseline ?? DefaultConfiguration.Text);
@@ -92,7 +93,7 @@ public partial class MainWindow : Window
         var context = new MenuContext(directory, _selection.ToArray());
         var request = new PrepareRequest(directory, DeploymentPackage.DataRoot, _installation.AppRoot, _source, Editor.Text);
         var snapshot = await SnapshotRuntime.PrepareAsync(request, Path.Combine(_installation.AppRoot, "ShellCommand.Broker.exe"), CancellationToken.None);
-        var env = new ResolveEnvironment(_installation.AppRoot, DeploymentPackage.DataRoot, Environment.GetEnvironmentVariables().Cast<System.Collections.DictionaryEntry>().ToDictionary(p => (string)p.Key, p => (string)p.Value!, StringComparer.OrdinalIgnoreCase));
+        var env = new ResolveEnvironment(_installation.AppRoot, DeploymentPackage.DataRoot, Environment.GetEnvironmentVariables().Cast<System.Collections.DictionaryEntry>().GroupBy(p => (string)p.Key, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => (string)g.Last().Value!, StringComparer.OrdinalIgnoreCase));
         var menu = MenuResolver.Resolve(snapshot.Global.Config, snapshot.Local.Config, snapshot.Facts, context, env);
         PreviewTree.Items.Clear();
         TreeViewItem Map(ResolvedItem item)
@@ -114,7 +115,7 @@ public partial class MainWindow : Window
     private async void Preview_Click(object sender, RoutedEventArgs e) => await RunUi(Preview);
     private void Preview_Selected(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
-        if (e.NewValue is TreeViewItem { Tag: ResolvedItem { Plan: { } plan } }) PlanDetails.Text = JsonSerializer.Serialize(plan, new JsonSerializerOptions { WriteIndented = true });
+        if (e.NewValue is TreeViewItem { Tag: ResolvedItem { Plan: { } plan } }) PlanDetails.Text = JsonSerializer.Serialize(plan, PreviewJson);
         else PlanDetails.Text = "选择一个动作，查看展开后的实际参数。";
     }
     private void Folder_Click(object sender, RoutedEventArgs e)

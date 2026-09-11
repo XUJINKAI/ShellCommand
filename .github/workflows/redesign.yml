@@ -22,7 +22,7 @@ jobs:
       - name: Managed tests
         shell: pwsh
         run: |
-          foreach ($project in Get-ChildItem tests -Recurse -Filter *.csproj) {
+          foreach ($project in Get-ChildItem tests/ShellCommand.*.Tests/*.csproj) {
             dotnet test $project.FullName -c Release --logger trx
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
           }
@@ -46,6 +46,13 @@ jobs:
         run: dotnet publish src/ShellCommand.App -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o artifacts/package
       - name: Publish broker
         run: dotnet publish src/ShellCommand.Broker -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o artifacts/package
+      - name: Packaged execution integration
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          dotnet publish tests/fixtures/ExecutionProbe -c Release -r win-x64 --self-contained false -o artifacts/probe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./packaging/scripts/Test-Execution.ps1 -Directory artifacts/package -Probe artifacts/probe/ExecutionProbe.exe
       - name: Build native DLL
         shell: cmd
         run: >-

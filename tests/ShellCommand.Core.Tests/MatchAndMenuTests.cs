@@ -14,7 +14,7 @@ public sealed class MatchAndMenuTests
     }
     [Fact] public void LocalOverrideSuppressesGlobalEvenWhenDisabled()
     {
-        var global = new MenuConfig([Command("one"), Command("two")], []);
+        var global = new MenuConfig([Command("one", "one"), Command("two", "two")], []);
         var local = new MenuConfig([Command("one") with { Enabled = false }], []);
         var menu = MenuResolver.Resolve(global, local, [], new(Root, []), Environment);
         Assert.Equal(2, menu.Items.Count(i => i.Kind == "action")); // two + settings

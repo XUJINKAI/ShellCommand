@@ -6,7 +6,7 @@ using ShellCommand.Core;
 namespace ShellCommand.Broker;
 
 public sealed record PrepareRequest(string? Directory, string DataDirectory, string AppDirectory, string? EditorPath = null, string? EditorText = null);
-public sealed record PersistedSource(int Version, Dictionary<string, string> Texts, string? BadHash, IReadOnlyList<Diagnostic> Diagnostics);
+public sealed record PersistedSource(int Version, Dictionary<string, string> Texts, string? BadHash, IReadOnlyList<Diagnostic> Diagnostics, Dictionary<string, string>? BadTexts = null);
 
 public static class Preparation
 {
@@ -39,14 +39,25 @@ public static class Preparation
         try
         {
             saved = JsonSerializer.Deserialize<PersistedSource>(ReadText(cache, 2 * 1024 * 1024));
-            if (saved?.Version == 2) good = BuildTree(root, saved.Texts, dependencies);
+            if (saved?.Version == 2) { if (saved.Texts.Count != 0) good = BuildTree(root, saved.Texts, dependencies); }
             else saved = null;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException) { saved = null; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException or DecoderFallbackException) { saved = null; }
         var texts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var hash = "";
         try
         {
+            if (saved?.BadTexts is { Count: > 0 } badTexts)
+            {
+                var unchanged = true;
+                foreach (var pair in badTexts)
+                {
+                    dependencies.Add(pair.Key);
+                    try { if (ReadConfig(pair.Key, request) != pair.Value) unchanged = false; }
+                    catch (Exception readError) when (readError is IOException or UnauthorizedAccessException or DecoderFallbackException) { unchanged = false; }
+                }
+                if (unchanged && Hash(badTexts) == saved.BadHash) return WithIcons(good, saved.Diagnostics, request);
+            }
             try { texts[root] = ReadConfig(root, request); }
             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
             {
@@ -63,16 +74,20 @@ public static class Preparation
             var total = Encoding.UTF8.GetByteCount(texts[root]);
             ReadIncludes(root, texts, dependencies, ref total, request);
             hash = Hash(texts);
-            if (saved is not null && saved.BadHash == hash) return new(PrepareIcons(good, request), saved.Diagnostics);
+            if (saved is not null && saved.BadHash == hash) return WithIcons(good, saved.Diagnostics, request);
             var model = BuildTree(root, texts, dependencies);
             if (request.EditorPath is null) Save(cache, new(2, texts, null, []));
-            return new(PrepareIcons(model, request), []);
+            return WithIcons(model, [], request);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or JsonException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or JsonException or DecoderFallbackException)
         {
             var diagnostics = ex is ConfigFailure failure ? failure.Diagnostics : new[] { new Diagnostic(root, DiagnosticSeverity.Error, "CONFIG_READ", ex.Message) };
-            if (request.EditorPath is null && hash.Length != 0 && saved is not null) Save(cache, saved with { BadHash = hash, Diagnostics = diagnostics });
-            return new(PrepareIcons(good, request), diagnostics);
+            if (request.EditorPath is null && texts.Count != 0 && ex is ConfigFailure)
+            {
+                try { Save(cache, new(2, saved?.Texts ?? new(), Hash(texts), diagnostics, texts)); }
+                catch (Exception saveError) when (saveError is IOException or UnauthorizedAccessException) { }
+            }
+            return WithIcons(good, diagnostics, request);
         }
     }
     private static string ReadConfig(string path, PrepareRequest request) => string.Equals(path, request.EditorPath, StringComparison.OrdinalIgnoreCase) ? request.EditorText ?? "" : ReadText(path, ConfigParser.MaxFileBytes);
@@ -119,7 +134,13 @@ public static class Preparation
         if (texts.Values.Sum(Encoding.UTF8.GetByteCount) > 1024 * 1024) throw new InvalidOperationException("快照过大。");
         return new(Visit(root), []);
     }
-    private static MenuConfig? PrepareIcons(MenuConfig? config, PrepareRequest request)
+    private static SourceSnapshot WithIcons(MenuConfig? config, IReadOnlyList<Diagnostic> diagnostics, PrepareRequest request)
+    {
+        var all = diagnostics.ToList();
+        var prepared = PrepareIcons(config, request, all);
+        return new(prepared, all);
+    }
+    private static MenuConfig? PrepareIcons(MenuConfig? config, PrepareRequest request, List<Diagnostic> diagnostics)
     {
         if (config is null) return null;
         MenuDefinition Map(MenuDefinition node)
@@ -132,7 +153,7 @@ public static class Preparation
                     var reference = IconCache.Prepare(icon, node.SourcePath, request.DataDirectory, request.AppDirectory);
                     icon = new(File: reference);
                 }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception) { icon = null; }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception) { icon = null; diagnostics.Add(new(node.SourcePath, DiagnosticSeverity.Warning, "ICON", ex.Message, Field: node.Id + ".icon")); }
             }
             return node with { Icon = icon, Items = node.Items?.Select(Map).ToArray() };
         }

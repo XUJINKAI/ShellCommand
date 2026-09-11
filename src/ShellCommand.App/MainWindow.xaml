@@ -23,7 +23,7 @@
        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="130"/></Grid.RowDefinitions>
        <TextBlock Text="菜单预览" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10"/>
        <DockPanel Grid.Row="1"><Button DockPanel.Dock="Right" Content="目录…" Click="Folder_Click" Margin="8,0,0,0"/><TextBox x:Name="PreviewDirectory" ToolTip="背景目录；跨目录选择时可留空"/></DockPanel>
-       <DockPanel Grid.Row="2" Margin="0,8,0,10"><Button DockPanel.Dock="Right" Content="预览" Click="Preview_Click" Background="#E9EEFF"/><Button Content="选择文件…" Click="SelectFiles_Click" Margin="0,0,8,0"/><Button Content="选文件夹…" Click="SelectFolder_Click" Margin="0,0,8,0"/><Button Content="清空选择" Click="ClearSelection_Click"/></DockPanel>
+       <WrapPanel Grid.Row="2" Margin="0,8,0,10"><Button DockPanel.Dock="Right" Content="预览" Click="Preview_Click" Background="#E9EEFF"/><Button Content="选择文件…" Click="SelectFiles_Click" Margin="0,0,8,0"/><Button Content="选文件夹…" Click="SelectFolder_Click" Margin="0,0,8,0"/><Button Content="清空选择" Click="ClearSelection_Click"/></WrapPanel>
        <TreeView x:Name="PreviewTree" Grid.Row="3" BorderBrush="#DCE1EC" Padding="12" SelectedItemChanged="Preview_Selected"/>
        <TextBox x:Name="PlanDetails" Grid.Row="4" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="11" Margin="0,10,0,0" ToolTip="所选动作的实际程序、参数与工作目录；预览不会执行命令"/>
       </Grid>

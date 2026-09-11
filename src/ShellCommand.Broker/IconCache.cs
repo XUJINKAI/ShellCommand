@@ -18,7 +18,7 @@ internal static class IconCache
         }
         else
         {
-            file = VariableExpander.Expand(file, new(null, []), source, new(app, data, Environment.GetEnvironmentVariables().Cast<System.Collections.DictionaryEntry>().ToDictionary(p => (string)p.Key, p => (string)p.Value!, StringComparer.OrdinalIgnoreCase)));
+            file = VariableExpander.Expand(file, new(null, []), source, new(app, data, Environment.GetEnvironmentVariables().Cast<System.Collections.DictionaryEntry>().GroupBy(p => (string)p.Key, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => (string)g.Last().Value!, StringComparer.OrdinalIgnoreCase)));
             file = Path.GetFullPath(file, Path.GetDirectoryName(source)!);
             if (file.StartsWith("\\\\", StringComparison.Ordinal)) throw new InvalidOperationException("图标不支持网络路径。");
         }
@@ -42,9 +42,9 @@ internal static class IconCache
                 {
                     if (GetDIBits(dc, info.Color, 0, 32, pixels, ref header, 0) == 0) throw new InvalidOperationException("图标位图不可用。");
                     var maskHeader = new BitmapInfo { Size = 40, Width = 32, Height = 32, Planes = 1, Bits = 1, ImageSize = 128, White = 0x00ffffff };
-                    GetDIBits(dc, info.Mask, 0, 32, mask, ref maskHeader, 0);
+                    if (GetDIBits(dc, info.Mask, 0, 32, mask, ref maskHeader, 0) == 0) throw new InvalidOperationException("图标透明蒙版不可用。");
                 }
-                finally { ReleaseDC(IntPtr.Zero, dc); }
+                finally { _ = ReleaseDC(IntPtr.Zero, dc); }
                 using var bytes = new MemoryStream(); using var writer = new BinaryWriter(bytes, Encoding.UTF8, true);
                 writer.Write((ushort)0); writer.Write((ushort)1); writer.Write((ushort)1);
                 writer.Write((byte)32); writer.Write((byte)32); writer.Write((ushort)0); writer.Write((ushort)1); writer.Write((ushort)32);

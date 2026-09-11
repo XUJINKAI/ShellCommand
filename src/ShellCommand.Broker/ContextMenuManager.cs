@@ -52,9 +52,9 @@ public sealed class ContextMenuScanner
         return result;
     }
 
-    private static IReadOnlyList<MenuEntry> ScanPackaged()
+    private static MenuEntry[] ScanPackaged()
     {
-        const string script = "$ErrorActionPreference='Stop'; $result=@(); Get-AppxPackage | Select-Object -First 500 | ForEach-Object { $p=$_; try { $m=Get-AppxPackageManifest -Package $p.PackageFullName; foreach($v in $m.SelectNodes("//*[local-name()='FileExplorerContextMenus']//*[local-name()='Verb']")) { $result+=@{ Name=$p.Name; Id=$v.Id; Clsid=$v.Clsid; Package=$p.PackageFullName } } } catch {} }; ConvertTo-Json -InputObject @($result) -Compress";
+        const string script = """$ErrorActionPreference='Stop'; $result=@(); Get-AppxPackage | Select-Object -First 500 | ForEach-Object { $p=$_; try { $m=Get-AppxPackageManifest -Package $p.PackageFullName; foreach($v in $m.SelectNodes("//*[local-name()='FileExplorerContextMenus']//*[local-name()='Verb']")) { $result+=@{ Name=$p.Name; Id=$v.Id; Clsid=$v.Clsid; Package=$p.PackageFullName } } } catch {} }; ConvertTo-Json -InputObject @($result) -Compress""";
         try
         {
             using var process = new Process { StartInfo = new("powershell.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true } };
@@ -191,10 +191,11 @@ public sealed class ContextMenuManager
         Directory.CreateDirectory(Path.GetDirectoryName(_journalPath)!);
         return new FileStream(_journalPath + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
     }
+    private static readonly string[] WritableScopes = new[] { "*\\shell\\", "Directory\\shell\\", "Directory\\Background\\shell\\", "Drive\\shell\\", "AllFilesystemObjects\\shell\\" };
     private static (string Path, string ValueName) Target(MenuEntry entry)
     {
         if (entry.Type == MenuEntryType.StaticVerb && entry.Source == "HKCU" &&
-            new[] { "*\\shell\\", "Directory\\shell\\", "Directory\\Background\\shell\\", "Drive\\shell\\", "AllFilesystemObjects\\shell\\" }.Any(p => entry.RegistrationPath.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
+            WritableScopes.Any(p => entry.RegistrationPath.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
             return (entry.RegistrationPath, "ProgrammaticAccessOnly");
         if (entry.Type == MenuEntryType.LegacyCom && Guid.TryParse(entry.Clsid, out var clsid))
             return (@"Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked", clsid.ToString("B"));
@@ -222,6 +223,7 @@ public sealed class ContextMenuManager
         if (records.Length > 4096) throw new InvalidDataException("恢复日志过大。");
         foreach (var record in records)
         {
+            if (record?.Entry is null || record.Entry.RegistrationPath is null) throw new InvalidDataException("恢复日志内容非法；停止修改。");
             var target = Target(record.Entry);
             if (target.Path != record.TargetPath || target.ValueName != record.ValueName || record.Previous is null || record.Applied is null)
                 throw new InvalidDataException("恢复日志内容非法；停止修改。");
@@ -245,7 +247,7 @@ public sealed class ContextMenuManager
         if (!snapshot.Exists) { key.DeleteValue(name, false); return; }
         object value = snapshot.Kind switch
         {
-            RegistryValueKind.Binary => Convert.FromBase64String(snapshot.Data ?? string.Empty),
+            RegistryValueKind.Binary or RegistryValueKind.None => Convert.FromBase64String(snapshot.Data ?? string.Empty),
             RegistryValueKind.MultiString => JsonSerializer.Deserialize<string[]>(snapshot.Data ?? "[]") ?? Array.Empty<string>(),
             RegistryValueKind.DWord => int.Parse(snapshot.Data ?? "0", System.Globalization.CultureInfo.InvariantCulture),
             RegistryValueKind.QWord => long.Parse(snapshot.Data ?? "0", System.Globalization.CultureInfo.InvariantCulture),
