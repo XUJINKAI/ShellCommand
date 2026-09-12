@@ -59,6 +59,14 @@ jobs:
           cl /nologo /LD /std:c++20 /EHsc /W4 /WX /MT /utf-8
           /DUNICODE /D_UNICODE /DNOMINMAX src\ShellCommand.Explorer\ShellCommandExplorer.cpp
           /link /OUT:artifacts\package\ShellCommand.Explorer.dll shlwapi.lib ole32.lib advapi32.lib shell32.lib uuid.lib
+      - name: Production DLL lifecycle and COM contract
+        timeout-minutes: 3
+        shell: cmd
+        run: >-
+          cl /nologo /std:c++20 /EHsc /W4 /WX /MT /utf-8
+          /DUNICODE /D_UNICODE /DNOMINMAX tests\ShellCommand.Explorer.Tests\DllLifecycleTests.cpp
+          /Fe:DllLifecycleTests.exe /link shlwapi.lib ole32.lib shell32.lib uuid.lib
+          && DllLifecycleTests.exe "%CD%\artifacts\package\ShellCommand.Explorer.dll"
       - name: Prepare distribution and verify layout
         shell: pwsh
         run: |
@@ -76,7 +84,7 @@ jobs:
           try { $previous = $registryKey.GetValue($name, $null) } finally { $registryKey.Close() }
           try {
             New-ItemProperty $key -Name $name -Value 1 -PropertyType DWord -Force | Out-Null
-            ./packaging/scripts/Smoke-Install.ps1 -PackageDirectory artifacts/package
+            ./packaging/scripts/Smoke-Install.ps1 -PackageDirectory artifacts/package -ComProbe (Resolve-Path DllLifecycleTests.exe).Path
           } finally {
             if ($null -eq $previous) { Remove-ItemProperty $key $name -ErrorAction SilentlyContinue }
             else { Set-ItemProperty $key $name $previous }

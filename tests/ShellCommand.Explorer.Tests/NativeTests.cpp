@@ -96,8 +96,112 @@ void NestedMenus() {
     Check(!ParseResolveResponse(nodes, children), "malformed leaf child count accepted");
 }
 
+
+void EnumeratorFailures() {
+    CommandEnumerator enumerator({ChildData{}, ChildData{}});
+    IExplorerCommand* output[3]{};
+    ULONG fetched = 99;
+    Check(enumerator.Next(2, nullptr, &fetched) == E_POINTER && fetched == 0, "failure left fetched uninitialized");
+    const auto objects = g_objectCount.load();
+    g_testCommandAllocationsBeforeFailure = 1;
+    Check(enumerator.Next(2, output, &fetched) == E_OUTOFMEMORY, "allocation failure was not injected");
+    Check(!output[0] && !output[1] && fetched == 0 && g_objectCount == objects,
+        "partial COM enumeration leaked ownership");
+    g_testCommandAllocationsBeforeFailure = -1;
+    Check(enumerator.Next(2, output, nullptr) == S_OK, "failure advanced cursor or optional fetched rejected");
+    output[0]->Release(); output[1]->Release();
+    output[0] = reinterpret_cast<IExplorerCommand*>(1);
+    Check(enumerator.Next(1, output, &fetched) == S_FALSE && fetched == 0 && !output[0], "end left stale COM pointer");
+    enumerator.Reset();
+    Check(enumerator.Next(3, output, &fetched) == S_FALSE && fetched == 2 && !output[2], "short enumeration outputs");
+    output[0]->Release(); output[1]->Release();
+}
+
+// The Shell may release/change its site during an outgoing COM call even in an
+// STA. Keep the site alive and reject results from the superseded context.
+class ReentrantSite final : public IUnknown {
+public:
+    ExplorerCommand* command;
+    bool& destroyed;
+    bool& releasedInsideQuery;
+    bool& releaseSawNewSite;
+    bool detachOnQuery = false;
+    ReentrantSite(ExplorerCommand* owner, bool& gone, bool& inside, bool& detached)
+        : command(owner), destroyed(gone), releasedInsideQuery(inside), releaseSawNewSite(detached) {}
+    HRESULT QueryInterface(REFIID iid, void** result) noexcept override {
+        if (!result) return E_POINTER;
+        *result = nullptr;
+        if (detachOnQuery) {
+            // Local copies are deliberate: the old implementation deletes this
+            // object in SetSite, before QueryInterface has even returned.
+            auto* owner = command;
+            auto* gone = &destroyed;
+            auto* inside = &releasedInsideQuery;
+            owner->SetSite(nullptr);
+            *inside = *gone;
+            return E_NOINTERFACE;
+        }
+        if (iid != IID_IUnknown) return E_NOINTERFACE;
+        *result = static_cast<IUnknown*>(this); AddRef(); return S_OK;
+    }
+    ULONG AddRef() noexcept override { return ++references; }
+    ULONG Release() noexcept override {
+        const auto left = --references;
+        if (!left) {
+            // Re-enter after the last reference was dropped. GetSite must already
+            // see the replacement, not the dying object.
+            void* current = nullptr;
+            releaseSawNewSite = command->GetSite(IID_IUnknown, &current) == E_FAIL && current == nullptr;
+            destroyed = true;
+            delete this;
+        }
+        return left;
+    }
+private:
+    std::atomic_ulong references = 1;
+};
+
+void ReentrantContext() {
+    ExplorerCommand command(true);
+    bool destroyed = false, releasedInside = false, releaseSawNewSite = false;
+    auto* site = new ReentrantSite(&command, destroyed, releasedInside, releaseSawNewSite);
+    command.SetSite(site);
+    site->Release(); // The command now owns the only reference.
+    site->detachOnQuery = true;
+    EXPCMDSTATE state{};
+    Check(command.GetState(nullptr, TRUE, &state) == E_PENDING, "stale reentrant context was published");
+    Check(destroyed && !releasedInside && releaseSawNewSite, "site lifetime broken by reentrant callback");
+}
+
+void ConcurrentComLifetime() {
+    auto* command = new ExplorerCommand(true);
+    std::vector<std::thread> callers;
+    for (int thread = 0; thread < 8; ++thread) callers.emplace_back([command] {
+        for (int iteration = 0; iteration < 10000; ++iteration) {
+            command->AddRef();
+            EXPCMDSTATE state{};
+            command->GetState(nullptr, FALSE, &state);
+            command->SetSite(nullptr);
+            command->Release();
+        }
+    });
+    for (auto& caller : callers) caller.join();
+    Check(command->Release() == 0, "concurrent AddRef/Release lost references");
+}
+
+void InvalidOutgoingStrings() {
+    std::vector<std::uint8_t> encoded;
+    Check(ToUtf8(L"", encoded) && encoded.empty(), "absent directory rejected");
+    Check(!ToUtf8(std::wstring(1, static_cast<wchar_t>(0xD800)), encoded), "invalid UTF-16 became an empty directory");
+    Check(!ToUtf8(std::wstring(L"C:\\a\0b", 6), encoded), "embedded NUL accepted");
+}
+
 int main() {
     try {
+        EnumeratorFailures();
+        ReentrantContext();
+        ConcurrentComLifetime();
+        InvalidOutgoingStrings();
         NestedMenus();
         Check(GetCurrentUserSid() != L"unknown", "SID capture");
         // ASan's first CreateThread can take longer than the production deadline.

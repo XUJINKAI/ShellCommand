@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([Parameter(Mandatory)][string]$PackageDirectory)
+param([Parameter(Mandatory)][string]$PackageDirectory, [string]$ComProbe)
 $ErrorActionPreference = 'Stop'
 # Run on a disposable Windows test user with development deployment enabled.
 # Never replace an existing user's integration as part of a smoke test.
@@ -32,6 +32,12 @@ try {
     $recoveryExe = "$($record.Root)/ShellCommand.exe"
     Remove-Item $source -Recurse -Force
     Run-App "$($record.Root)/ShellCommand.exe" '--check-installation'
+    if ($ComProbe) {
+        $probe = Start-Process $ComProbe -ArgumentList '--registered' -PassThru -NoNewWindow
+        if (!$probe.WaitForExit(30000)) { $probe.Kill($true); throw 'Registered COM probe timed out.' }
+        $probe.Refresh()
+        if ($probe.ExitCode -ne 0) { throw "Registered COM probe failed ($($probe.ExitCode))." }
+    }
     Write-Host 'Runner health passed after removal of the source. Explorer/Surrogate UI verification is still a separate gate.'
 } finally {
     if ($installed) {

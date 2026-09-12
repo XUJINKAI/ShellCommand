@@ -53,6 +53,7 @@ std::atomic_ulong g_pendingRequests = 0;
 constexpr unsigned long kMaxPendingRequests = 8;
 #ifdef SHELLCOMMAND_NATIVE_TEST
 std::atomic_ulong g_testCleanupDelayMs = 0;
+std::atomic_long g_testCommandAllocationsBeforeFailure = -1;
 #endif
 
 struct ChildData {
@@ -241,7 +242,8 @@ bool ToUtf8(const std::wstring& value, std::vector<std::uint8_t>& output) {
         0,
         nullptr,
         nullptr);
-    if (byteCount < 0 || byteCount > static_cast<int>(kMaxStringBytes)) {
+    if ((byteCount == 0 && !value.empty()) || byteCount > static_cast<int>(kMaxStringBytes) ||
+        value.find(L'\0') != std::wstring::npos) {
         return false;
     }
 
@@ -537,13 +539,29 @@ bool InvokeToken(const std::uint8_t token[16]) noexcept {
     } catch (...) { return false; }
 }
 
+// Short state copies only. Never hold this lock across Shell/COM calls or IPC:
+// even an STA can be re-entered while making an outgoing COM call.
+class StateLock final {
+public:
+    explicit StateLock(SRWLOCK& lock) noexcept : lock_(lock) { AcquireSRWLockExclusive(&lock_); }
+    ~StateLock() noexcept { ReleaseSRWLockExclusive(&lock_); }
+    StateLock(const StateLock&) = delete;
+    StateLock& operator=(const StateLock&) = delete;
+private:
+    SRWLOCK& lock_;
+};
+
 template<class T> class ComPtr final {
 public:
+    ComPtr() noexcept = default;
+    ComPtr(const ComPtr&) = delete;
+    ComPtr& operator=(const ComPtr&) = delete;
     T* value = nullptr;
     ~ComPtr() { if (value) value->Release(); }
     T* operator->() const noexcept { return value; }
 };
 bool ItemPath(IShellItem* item, std::wstring& path) {
+    if (!item) return false;
     PWSTR text = nullptr;
     if (FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &text)) || !text) return false;
     try { path = text; } catch (...) { CoTaskMemFree(text); throw; }
@@ -553,19 +571,19 @@ bool ItemPath(IShellItem* item, std::wstring& path) {
 bool ViewDirectory(IUnknown* site, std::wstring& path) {
     if (!site) return false;
     ComPtr<IServiceProvider> provider;
-    if (FAILED(site->QueryInterface(IID_PPV_ARGS(&provider.value)))) return false;
+    if (FAILED(site->QueryInterface(IID_PPV_ARGS(&provider.value))) || !provider.value) return false;
     ComPtr<IFolderView> view;
-    if (FAILED(provider->QueryService(SID_SFolderView, IID_PPV_ARGS(&view.value)))) {
+    if (FAILED(provider->QueryService(SID_SFolderView, IID_PPV_ARGS(&view.value))) || !view.value) {
         ComPtr<IShellBrowser> browser;
         ComPtr<IShellView> shellView;
-        if (FAILED(provider->QueryService(SID_STopLevelBrowser, IID_PPV_ARGS(&browser.value))) ||
-            FAILED(browser->QueryActiveShellView(&shellView.value)) ||
-            FAILED(shellView->QueryInterface(IID_PPV_ARGS(&view.value)))) return false;
+        if (FAILED(provider->QueryService(SID_STopLevelBrowser, IID_PPV_ARGS(&browser.value))) || !browser.value ||
+            FAILED(browser->QueryActiveShellView(&shellView.value)) || !shellView.value ||
+            FAILED(shellView->QueryInterface(IID_PPV_ARGS(&view.value))) || !view.value) return false;
     }
     ComPtr<IPersistFolder2> folder;
-    if (FAILED(view->GetFolder(IID_PPV_ARGS(&folder.value)))) return false;
+    if (FAILED(view->GetFolder(IID_PPV_ARGS(&folder.value))) || !folder.value) return false;
     PIDLIST_ABSOLUTE pidl = nullptr;
-    if (FAILED(folder->GetCurFolder(&pidl))) return false;
+    if (FAILED(folder->GetCurFolder(&pidl)) || !pidl) return false;
     ComPtr<IShellItem> item;
     const auto hr = SHCreateItemFromIDList(pidl, IID_PPV_ARGS(&item.value));
     CoTaskMemFree(pidl);
@@ -580,7 +598,7 @@ bool CaptureContext(IUnknown* site, IShellItemArray* items, std::wstring& direct
         if (count > 256) return false;
         for (DWORD i = 0; i < count; ++i) {
             ComPtr<IShellItem> item;
-            if (FAILED(items->GetItemAt(i, &item.value))) return false;
+            if (FAILED(items->GetItemAt(i, &item.value)) || !item.value) return false;
             SFGAOF attributes = 0;
             if (FAILED(item->GetAttributes(SFGAO_FILESYSTEM | SFGAO_FOLDER, &attributes)) || !(attributes & SFGAO_FILESYSTEM)) return false;
             SelectionData selected;
@@ -641,7 +659,8 @@ public:
     }
 
     ~ExplorerCommand() noexcept {
-        if (site_) site_->Release();
+        auto* site = std::exchange(site_, nullptr);
+        if (site) site->Release();
         --g_objectCount;
     }
 
@@ -662,14 +681,29 @@ public:
 
     HRESULT SetSite(IUnknown* site) noexcept override {
         if (site) site->AddRef();
-        if (site_) site_->Release();
-        site_ = site; contextValid_ = false;
+        IUnknown* previous = nullptr;
+        {
+            StateLock lock(stateLock_);
+            previous = std::exchange(site_, site);
+            ++contextGeneration_;
+            contextValid_ = false;
+            currentDirectory_.clear();
+            selection_.clear();
+        }
+        // Publish the new site before releasing the old one: Release may re-enter us.
+        if (previous) previous->Release();
         return S_OK;
     }
     HRESULT GetSite(REFIID iid, void** value) noexcept override {
         if (!value) return E_POINTER;
         *value = nullptr;
-        return site_ ? site_->QueryInterface(iid, value) : E_FAIL;
+        ComPtr<IUnknown> site;
+        {
+            StateLock lock(stateLock_);
+            site.value = site_;
+            if (site.value) site->AddRef();
+        }
+        return site.value ? site->QueryInterface(iid, value) : E_FAIL;
     }
     ULONG AddRef() noexcept override {
         return ++referenceCount_;
@@ -716,7 +750,9 @@ public:
         if (value == nullptr) {
             return E_POINTER;
         }
-        *value = kClsid;
+        // Dynamic groups/separators have no registered canonical verb. In particular,
+        // they must not masquerade as the root command by returning its CLSID.
+        *value = isRoot_ ? kClsid : GUID_NULL;
         if (!isRoot_ && !IsZeroToken(data_.token)) std::memcpy(value, data_.token, 16);
         return S_OK;
     }
@@ -727,9 +763,29 @@ public:
         }
 
         *state = ECS_ENABLED;
-        if (isRoot_) {
+        if (!isRoot_) return S_OK;
+        ComPtr<IUnknown> site;
+        unsigned long long generation = 0;
+        {
+            StateLock lock(stateLock_);
+            generation = ++contextGeneration_;
+            // A fast query for a new selection must not leave the previous menu active.
+            contextValid_ = false;
+            currentDirectory_.clear();
+            selection_.clear();
             if (!fOkToBeSlow) return E_PENDING;
-            contextValid_ = CaptureContext(site_, items, currentDirectory_, selection_);
+            site.value = site_;
+            if (site.value) site->AddRef();
+        }
+        std::wstring directory;
+        std::vector<SelectionData> selection;
+        const bool valid = CaptureContext(site.value, items, directory, selection);
+        {
+            StateLock lock(stateLock_);
+            if (generation != contextGeneration_) return E_PENDING;
+            currentDirectory_ = std::move(directory);
+            selection_ = std::move(selection);
+            contextValid_ = valid;
         }
         return S_OK;
     }
@@ -748,13 +804,14 @@ public:
     HRESULT EnumSubCommands(IEnumExplorerCommand** result) noexcept override;
 
 private:
+    SRWLOCK stateLock_ = SRWLOCK_INIT;
+    unsigned long long contextGeneration_ = 0;
     IUnknown* site_ = nullptr;
     bool contextValid_ = false;
     std::vector<SelectionData> selection_;
-    ULONG referenceCount_ = 1;
+    std::atomic_ulong referenceCount_ = 1;
     bool isRoot_ = false;
     ChildData data_{};
-    std::vector<ChildData> children_;
     std::wstring currentDirectory_;
 };
 
@@ -797,45 +854,44 @@ public:
 
     HRESULT Next(ULONG count, IExplorerCommand** output,
                  ULONG* fetched) noexcept override {
-        if (output == nullptr) {
-            return E_POINTER;
-        }
-        if (count != 1 && fetched == nullptr) {
-            return E_INVALIDARG;
-        }
-
+        if (fetched) *fetched = 0;
+        if (!output) return E_POINTER;
+        // pceltFetched is optional for this interface, including multi-element calls.
+        for (ULONG i = 0; i < count; ++i) output[i] = nullptr;
+        StateLock lock(stateLock_);
         ULONG copied = 0;
         try {
-            while (copied < count && index_ < items_.size()) {
-                output[copied] = new (std::nothrow) ExplorerCommand(items_[index_++]);
-                if (output[copied] == nullptr) {
-                    if (fetched != nullptr) {
-                        *fetched = copied;
-                    }
-                    return E_OUTOFMEMORY;
-                }
+            while (copied < count && index_ + copied < items_.size()) {
+#ifdef SHELLCOMMAND_NATIVE_TEST
+                if (g_testCommandAllocationsBeforeFailure == 0) throw std::bad_alloc();
+                if (g_testCommandAllocationsBeforeFailure > 0) --g_testCommandAllocationsBeforeFailure;
+#endif
+                output[copied] = new ExplorerCommand(items_[index_ + copied]);
                 ++copied;
             }
         } catch (...) {
-            if (fetched != nullptr) {
-                *fetched = copied;
+            // An HRESULT failure transfers no interface ownership, and does not
+            // advance the cursor. Never expose a half-filled array to the marshaler.
+            for (ULONG i = 0; i < copied; ++i) {
+                output[i]->Release();
+                output[i] = nullptr;
             }
             return E_OUTOFMEMORY;
         }
-
-        if (fetched != nullptr) {
-            *fetched = copied;
-        }
+        index_ += copied;
+        if (fetched) *fetched = copied;
         return copied == count ? S_OK : S_FALSE;
     }
 
     HRESULT Skip(ULONG count) noexcept override {
+        StateLock lock(stateLock_);
         const std::size_t remaining = items_.size() - index_;
         index_ += static_cast<ULONG>(std::min<std::size_t>(count, remaining));
         return count <= remaining ? S_OK : S_FALSE;
     }
 
     HRESULT Reset() noexcept override {
+        StateLock lock(stateLock_);
         index_ = 0;
         return S_OK;
     }
@@ -847,6 +903,7 @@ public:
         *result = nullptr;
 
         try {
+            StateLock lock(stateLock_);
             auto* clone = new (std::nothrow) CommandEnumerator(items_);
             if (clone == nullptr) {
                 return E_OUTOFMEMORY;
@@ -860,8 +917,9 @@ public:
     }
 
 private:
-    ULONG referenceCount_ = 1;
-    std::vector<ChildData> items_;
+    std::atomic_ulong referenceCount_ = 1;
+    SRWLOCK stateLock_ = SRWLOCK_INIT;
+    const std::vector<ChildData> items_;
     std::size_t index_ = 0;
 };
 
@@ -873,19 +931,35 @@ HRESULT ExplorerCommand::EnumSubCommands(IEnumExplorerCommand** result) noexcept
     if (!isRoot_ && data_.children.empty()) return E_NOTIMPL;
 
     try {
-        children_.clear();
-        if (!isRoot_) children_ = data_.children;
-        else if (contextValid_) Resolve(currentDirectory_, children_, selection_);
+        std::vector<ChildData> children;
+        if (!isRoot_) children = data_.children;
+        else {
+            std::wstring directory;
+            std::vector<SelectionData> selection;
+            bool valid = false;
+            unsigned long long generation = 0;
+            {
+                StateLock lock(stateLock_);
+                valid = contextValid_;
+                generation = contextGeneration_;
+                if (valid) { directory = currentDirectory_; selection = selection_; }
+            }
+            if (valid) Resolve(directory, children, selection);
+            {
+                StateLock lock(stateLock_);
+                if (generation != contextGeneration_) children.clear();
+            }
+        }
 
-        if (children_.empty()) {
+        if (children.empty()) {
             // Broker 不可用、路径不可用或响应非法时，始终保留最小可用入口。
             ChildData fallback;
             fallback.title = L"设置…";
             fallback.isFallback = true;
-            children_.push_back(std::move(fallback));
+            children.push_back(std::move(fallback));
         }
 
-        auto* enumerator = new (std::nothrow) CommandEnumerator(std::move(children_));
+        auto* enumerator = new (std::nothrow) CommandEnumerator(std::move(children));
         if (enumerator == nullptr) {
             return E_OUTOFMEMORY;
         }
@@ -958,13 +1032,11 @@ public:
     }
 
     HRESULT CreateInstance(IUnknown* outer, REFIID iid, void** result) noexcept override {
-        if (outer != nullptr) {
-            return CLASS_E_NOAGGREGATION;
-        }
         if (result == nullptr) {
             return E_POINTER;
         }
         *result = nullptr;
+        if (outer != nullptr) return CLASS_E_NOAGGREGATION;
 
         auto* command = new (std::nothrow) ExplorerCommand(true);
         if (command == nullptr) {
@@ -986,7 +1058,7 @@ public:
     }
 
 private:
-    ULONG referenceCount_ = 1;
+    std::atomic_ulong referenceCount_ = 1;
 };
 
 } // namespace
