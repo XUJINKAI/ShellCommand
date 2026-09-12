@@ -72,7 +72,8 @@ jobs:
           $key = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock'
           $name = 'AllowDevelopmentWithoutDevLicense'
           New-Item $key -Force | Out-Null
-          $previous = Get-ItemPropertyValue $key $name -ErrorAction SilentlyContinue
+          $registryKey = Get-Item -LiteralPath $key
+          try { $previous = $registryKey.GetValue($name, $null) } finally { $registryKey.Close() }
           try {
             New-ItemProperty $key -Name $name -Value 1 -PropertyType DWord -Force | Out-Null
             ./packaging/scripts/Smoke-Install.ps1 -PackageDirectory artifacts/package
