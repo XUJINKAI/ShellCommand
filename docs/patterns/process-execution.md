@@ -1,70 +1,7 @@
-# Pattern: Process Execution
+# ShellCommand v2 — process-execution
 
-## Scope
+本契约以[已确认的完整设计](../redesign-v2.md)为准。仅支持 `version: 2`，不保留旧字段、旧命令行语法或配置迁移。
 
-统一用户 command、打开 App、需要 UAC 的动作启动语义。
+安装根固定为 `%LOCALAPPDATA%\ShellCommand11`，config 与 runner 分离。Core 是不可变数据、条件、变量与执行计划；准备进程处理 YAML/目录/图标；Broker 的 Resolve 只读取内存，Invoke 入队后立即 ACK；用户动作在独立执行进程中运行；native 仅上下文、限时 IPC 和 COM 菜单映射。
 
-## User Commands
-
-用户 `Command` 是 Windows command line。
-
-实现不得：
-
-```text
-Split(' ')
-手工按第一个空格拆 exe/args
-未经定义自动套 cmd.exe
-```
-
-必须使用与 Windows 命令行规则一致的解析/启动方式。
-
-## Working Directory
-
-所有用户 command 的 working directory = Resolve 时的目录。
-
-工作目录在 action token 生成时冻结；点击时不从 Explorer 重新推断。
-
-## Shell Features
-
-如果用户需要：
-
-```text
-|
->
-&&
-cmd built-in
-```
-
-配置必须显式：
-
-```yaml
-Command: cmd.exe /c "..."
-```
-
-ShellCommand 自己不解释 shell metacharacters。
-
-## Elevation
-
-`RunAsAdmin: true`：
-
-- 使用 Windows `runas` / ShellExecuteEx 等正式 UAC 机制；
-- 不关闭 UAC；
-- 不缓存管理员 token；
-- 不把 Broker 自身变成长期 elevated process。
-
-## Explorer Integration
-
-用户命令绝不由 Explorer DLL 直接执行。
-
-Explorer fallback `Open ShellCommand 11` 是例外，因为它只启动固定安装路径，不接受用户 command。
-
-## Lifetime
-
-V11 只负责成功启动，不负责：
-
-- 捕获所有 stdout/stderr；
-- terminal embedding；
-- job dashboard；
-- kill running command。
-
-未来若增加这些能力必须新建 Feature/Contract。
+用户已要求继续完成整体编码。实机检查是发布验收门槛，不阻塞后续开发。当前实现进度和实机检查见 `docs/p0-validation.md`；历史实现不构成兼容承诺。

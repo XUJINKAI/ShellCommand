@@ -85,3 +85,21 @@ Explorer side 只允许极轻量 diagnostics，例如 ETW/OutputDebugString 或 
 不得在每次右键同步 append/flush 日志文件。
 
 详细日志在 Broker。
+
+## COM lifetime and reentrancy
+
+`SetSite` 先发布新 site 并清空上下文，再释放旧 site。`GetSite` / 上下文提取在调用外部 COM 前持有独立引用；不能在外部 QueryInterface、Release、Shell API 或 IPC 期间持有状态锁。STA 不排除外呼期间的重入。选择查询用 generation 发布快照；新 site 或后续 GetState 使旧结果失效，快查询不能沿用旧目录。EnumSubCommands 使用自己的局部菜单容器。
+
+对象引用计数使用原子操作。枚举游标受短锁保护；Next 初始化所有输出，允许省略 fetched，分配失败释放全部临时接口且保持游标不变。动态分组、分隔和 fallback 没有注册的 canonical verb，返回 GUID_NULL，不复用根 CLSID。
+
+Windows CI 除源文件级 IPC/ASan 测试外，必须加载实际发布 DLL，经过导出的工厂创建命令，验证 COM 枚举并循环卸载；安装测试在真实注册后用 CLSCTX_LOCAL_SERVER 激活 Surrogate，验证跨进程接口调用。它们仍不等于 Explorer UI 实机验收。
+
+接口依据：[GetState](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-iexplorercommand-getstate)、[Next 的可选 fetched](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ienumexplorercommand-next)。
+
+## Optional string results
+
+`GetIcon` 没有图标时必须返回失败 HRESULT（`E_NOTIMPL`）并清空输出。任何成功 HRESULT 都必须提供有效、由 `CoTaskMemAlloc` 分配的图标字符串。不能用 `S_FALSE + nullptr` 表示没有图标：`S_FALSE` 仍满足 `SUCCEEDED(hr)`，Windows 菜单构建器会直接消费这个字符串。
+
+同样审查 GetTitle/GetToolTip 等指针输出的 HRESULT 契约。不能把枚举接口合法的 `S_FALSE` 语义套用到图标接口。测试必须调用 GetIcon，覆盖根菜单、有图标动作及无图标的动作/分组/分隔/fallback，并通过发布 DLL 和注册 Surrogate 验证。
+
+依据：[GetIcon 成功时返回资源字符串](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-iexplorercommand-geticon)、[SUCCEEDED 接受所有非负 HRESULT](https://learn.microsoft.com/en-us/windows/win32/api/winerror/nf-winerror-succeeded)。

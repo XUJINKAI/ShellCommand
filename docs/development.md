@@ -71,8 +71,8 @@ AI 应按以下顺序推进，避免先碰 Explorer 黑盒再回头补核心：
 
 1. 建立解决方案和项目边界；
 2. 实现 Core Model；
-3. 实现 Match 解析/评价；
-4. 单元测试旧配置中的典型规则。
+3. 实现 when 条件评价；
+4. 单元测试 v2 条件、变量和选择上下文。
 
 完成条件：不引用任何 Win32/COM/WPF/YamlDotNet。
 
@@ -82,7 +82,7 @@ AI 应按以下顺序推进，避免先碰 Explorer 黑盒再回头补核心：
 2. 实现全局配置解析；
 3. 严格限制 YAML 子集与输入大小；
 4. 产生行/列诊断；
-5. 添加旧 ShellCommand 示例兼容测试。
+5. 添加 v2 示例、错误输入与严格子集测试。
 
 ### Phase 3 — Broker
 
@@ -124,7 +124,7 @@ AI 应按以下顺序推进，避免先碰 Explorer 黑盒再回头补核心：
 3. reversible state journal；
 4. static verb disable；
 5. COM block/unblock；
-6. packaged command best-effort block；
+6. packaged command 只读发现；
 7. Explorer restart flow。
 
 ## 测试分类
@@ -133,7 +133,7 @@ AI 应按以下顺序推进，避免先碰 Explorer 黑盒再回头补核心：
 
 必须覆盖：
 
-- Match truth table；
+- when 三值逻辑 truth table；
 - invalid YAML；
 - unknown key；
 - limits；
@@ -201,20 +201,9 @@ max
 - 不让 App 直接写业务注册表；由 Broker/明确的 elevated action 完成；
 - Native COM 方法必须 `noexcept` 风格处理边界，任何异常转换为安全 HRESULT/隐藏状态。
 
-## 兼容性测试基线
+## 配置测试基线
 
-将旧仓库 `global.template.shellcommand.yaml` 中至少这些用例固定成测试：
-
-- `.git`；
-- `!.git`；
-- `.git<&&>!README.md`；
-- `.gitmodules`；
-- `%LocalAppData%`；
-- `%PROGRAMFILES%`；
-- `%DIR%`；
-- `RunAsAdmin`；
-- `---` separator；
-- DLL icon resource `?index`。
+不读取或迁移旧配置。测试 v2 的 all/any/not/exists、source-relative 路径、标量与列表变量、each、脚本文本不插值、disabled 覆盖、子菜单、include 原子发布、LKG、明确删除和不可读差异。打包后执行器测试空参数、中文、引号、尾部反斜杠、环境变量和并发排空输出。
 
 ## 不做的预优化
 

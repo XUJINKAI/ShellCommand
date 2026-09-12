@@ -3,7 +3,7 @@
 ## Install
 
 ```text
-Build/sign/copy complete binaries
+Build/copy complete binaries
         │
         ▼
 Prepare sparse package identity
@@ -98,3 +98,5 @@ Offer Explorer restart
 - `Show more options` 不是唯一入口；
 - fallback 在 Broker kill 后可用；
 - uninstall 后 ShellCommand modern entry 消失。
+
+安装仅从界面直接注册 manifest，不检查签名身份包；完整当前约定见 [安装契约](../contracts/installation.md)。

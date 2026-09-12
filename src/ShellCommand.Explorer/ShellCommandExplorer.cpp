@@ -5,6 +5,9 @@
 #include <shlwapi.h>
 #include <sddl.h>
 #include <shellapi.h>
+#include <shlobj.h>
+#include <shlguid.h>
+#include <servprov.h>
 
 #include <algorithm>
 #include <atomic>
@@ -13,6 +16,7 @@
 #include <cwchar>
 #include <limits>
 #include <new>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -26,14 +30,14 @@ extern "C" IMAGE_DOS_HEADER __ImageBase;
 namespace {
 
 // 协议常量必须与 docs/contracts/broker-ipc.md 保持一致。
-constexpr std::uint16_t kProtocolVersion = 1;
+constexpr std::uint16_t kProtocolVersion = 3;
 constexpr std::uint16_t kResolveRequest = 10;
 constexpr std::uint16_t kResolveResponse = 11;
 constexpr std::uint16_t kInvokeRequest = 20;
 constexpr std::uint16_t kInvokeResponse = 21;
 constexpr std::uint32_t kMaxPayloadBytes = 256 * 1024;
 constexpr std::uint32_t kMaxStringBytes = 32 * 1024;
-constexpr std::uint16_t kMaxMenuItems = 100;
+constexpr std::uint16_t kMaxMenuItems = 128;
 constexpr ULONGLONG kIpcDeadlineMs = 30;
 
 constexpr GUID kClsid = {
@@ -45,6 +49,12 @@ constexpr GUID kClsid = {
 
 std::atomic_ulong g_objectCount = 0;
 std::atomic_ulong g_serverLocks = 0;
+std::atomic_ulong g_pendingRequests = 0;
+constexpr unsigned long kMaxPendingRequests = 8;
+#ifdef SHELLCOMMAND_NATIVE_TEST
+std::atomic_ulong g_testCleanupDelayMs = 0;
+std::atomic_long g_testCommandAllocationsBeforeFailure = -1;
+#endif
 
 struct ChildData {
     std::wstring title;
@@ -52,7 +62,9 @@ struct ChildData {
     std::uint8_t token[16]{};
     bool isFallback = false;
     bool isSeparator = false;
+    std::vector<ChildData> children;
 };
+struct SelectionData { std::wstring path; bool folder = false; };
 
 class ScopedHandle final {
 public:
@@ -112,45 +124,55 @@ bool IsSc11Frame(const std::uint8_t* header, std::uint16_t messageType,
     return payloadLength <= kMaxPayloadBytes;
 }
 
-// 使用一个绝对 deadline 覆盖连接后的每一次读写，避免每个阶段重复等待 30ms。
-bool TimedIo(HANDLE pipe, bool write, void* data, DWORD length,
-             ULONGLONG deadline) noexcept {
+// Called only by a bounded request worker. Completion owns its memory even when
+// CancelIoEx is delayed. Never perform this cleanup wait on an Explorer callback.
+struct PendingIo final {
     OVERLAPPED overlapped{};
-    overlapped.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    if (overlapped.hEvent == nullptr) {
-        return false;
+    std::vector<std::uint8_t> bytes;
+    explicit PendingIo(DWORD length) : bytes(length) {
+        overlapped.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     }
+    ~PendingIo() { if (overlapped.hEvent) CloseHandle(overlapped.hEvent); }
+};
 
-    DWORD transferred = 0;
-    const BOOL completed = write
-        ? WriteFile(pipe, data, length, &transferred, &overlapped)
-        : ReadFile(pipe, data, length, &transferred, &overlapped);
-
-    if (!completed) {
-        if (GetLastError() != ERROR_IO_PENDING) {
-            CloseHandle(overlapped.hEvent);
-            return false;
+bool TimedIo(HANDLE pipe, bool write, void* data, DWORD length,
+             ULONGLONG deadline) {
+    auto operation = std::make_unique<PendingIo>(length);
+    if (!operation->overlapped.hEvent) return false;
+    if (write && length) std::memcpy(operation->bytes.data(), data, length);
+    DWORD position = 0;
+    while (position < length) {
+        if (GetTickCount64() >= deadline) return false;
+        ResetEvent(operation->overlapped.hEvent);
+        DWORD transferred = 0;
+        const BOOL completed = write
+            ? WriteFile(pipe, operation->bytes.data() + position, length - position,
+                        &transferred, &operation->overlapped)
+            : ReadFile(pipe, operation->bytes.data() + position, length - position,
+                       &transferred, &operation->overlapped);
+        if (!completed) {
+            if (GetLastError() != ERROR_IO_PENDING) return false;
+            const auto now = GetTickCount64();
+            const auto waitMs = now >= deadline ? 0 : static_cast<DWORD>(deadline - now);
+            if (WaitForSingleObject(operation->overlapped.hEvent, waitMs) != WAIT_OBJECT_0) {
+                CancelIoEx(pipe, &operation->overlapped);
+#ifdef SHELLCOMMAND_NATIVE_TEST
+                Sleep(g_testCleanupDelayMs.load());
+#endif
+                // Even ERROR_NOT_FOUND from cancellation can race with completion.
+                // The bounded worker retains the pipe and buffers until signaled.
+                WaitForSingleObject(operation->overlapped.hEvent, INFINITE);
+                GetOverlappedResult(pipe, &operation->overlapped, &transferred, FALSE);
+                return false;
+            }
+            if (!GetOverlappedResult(pipe, &operation->overlapped, &transferred, FALSE)) return false;
         }
-
-        const ULONGLONG now = GetTickCount64();
-        const DWORD waitMs = now >= deadline
-            ? 0
-            : static_cast<DWORD>(std::min<ULONGLONG>(
-                deadline - now, std::numeric_limits<DWORD>::max()));
-
-        if (WaitForSingleObject(overlapped.hEvent, waitMs) != WAIT_OBJECT_0) {
-            CancelIoEx(pipe, &overlapped);
-            CloseHandle(overlapped.hEvent);
-            return false;
-        }
-        if (!GetOverlappedResult(pipe, &overlapped, &transferred, FALSE)) {
-            CloseHandle(overlapped.hEvent);
-            return false;
-        }
+        if (transferred == 0) return false;
+        position += transferred;
     }
-
-    CloseHandle(overlapped.hEvent);
-    return transferred == length;
+    if (GetTickCount64() >= deadline) return false;
+    if (!write && length) std::memcpy(data, operation->bytes.data(), length);
+    return true;
 }
 
 std::wstring GetCurrentUserSid() noexcept {
@@ -188,14 +210,20 @@ std::wstring GetCurrentUserSid() noexcept {
 }
 
 HANDLE OpenBrokerPipe() {
-    const std::wstring pipeName = L"\\\\.\\pipe\\ShellCommand11." + GetCurrentUserSid();
+    DWORD session = 0;
+    if (!ProcessIdToSessionId(GetCurrentProcessId(), &session)) return INVALID_HANDLE_VALUE;
+#ifdef SHELLCOMMAND_NATIVE_TEST
+    const std::wstring pipeName = L"\\\\.\\pipe\\ShellCommand11.Test." + std::to_wstring(GetCurrentProcessId());
+#else
+    const std::wstring pipeName = L"\\\\.\\pipe\\ShellCommand11." + GetCurrentUserSid() + L"." + std::to_wstring(session);
+#endif
     return CreateFileW(
         pipeName.c_str(),
         GENERIC_READ | GENERIC_WRITE,
         0,
         nullptr,
         OPEN_EXISTING,
-        FILE_FLAG_OVERLAPPED,
+        FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
         nullptr);
 }
 
@@ -214,7 +242,8 @@ bool ToUtf8(const std::wstring& value, std::vector<std::uint8_t>& output) {
         0,
         nullptr,
         nullptr);
-    if (byteCount < 0 || byteCount > static_cast<int>(kMaxStringBytes)) {
+    if ((byteCount == 0 && !value.empty()) || byteCount > static_cast<int>(kMaxStringBytes) ||
+        value.find(L'\0') != std::wstring::npos) {
         return false;
     }
 
@@ -272,11 +301,12 @@ bool ReadUtf8String(const std::vector<std::uint8_t>& payload, std::size_t& posit
         return false;
     }
 
+    if (result.find(L'\0') != std::wstring::npos) return false;
     position += byteLength;
     return true;
 }
 
-bool ReadFrame(HANDLE pipe, std::uint16_t expectedType, ULONGLONG deadline,
+bool ReadFrame(HANDLE pipe, std::uint16_t expectedType, std::uint32_t requestId, ULONGLONG deadline,
                std::vector<std::uint8_t>& payload) {
     std::uint8_t header[16]{};
     if (!TimedIo(pipe, false, header, sizeof(header), deadline)) {
@@ -284,7 +314,7 @@ bool ReadFrame(HANDLE pipe, std::uint16_t expectedType, ULONGLONG deadline,
     }
 
     std::uint32_t payloadLength = 0;
-    if (!IsSc11Frame(header, expectedType, payloadLength)) {
+    if (!IsSc11Frame(header, expectedType, payloadLength) || ReadUInt32(header + 8) != requestId) {
         return false;
     }
 
@@ -316,65 +346,42 @@ bool IsZeroToken(const std::uint8_t* token) noexcept {
     return true;
 }
 
-bool ParseResolveResponse(const std::vector<std::uint8_t>& payload,
-                          std::vector<ChildData>& children) {
-    // status(uint8) + itemCount(uint16) 是 ResolveMenuResponse 的固定前缀。
-    if (payload.size() < 3) {
-        return false;
-    }
-
-    const std::uint8_t status = payload[0];
-    if (status != 0 && status != 1) { // OK / NO_COMMANDS
-        return false;
-    }
-
-    const std::uint16_t itemCount = ReadUInt16(payload.data() + 1);
-    if (itemCount > kMaxMenuItems) {
-        return false;
-    }
-
-    children.clear();
-    children.reserve(itemCount);
-    std::size_t position = 3;
-
-    for (std::uint16_t index = 0; index < itemCount; ++index) {
-        // kind(1) + flags(1) + reserved(2) + token(16)
-        if (!HasBytes(position, 20, payload.size())) {
-            return false;
-        }
-
+bool ReadMenuItems(const std::vector<std::uint8_t>& payload, std::size_t& position,
+                   std::vector<ChildData>& children, unsigned int depth, unsigned int& total) {
+    if (depth > 3 || !HasBytes(position, 2, payload.size())) return false;
+    const auto count = ReadUInt16(payload.data() + position); position += 2;
+    total += count;
+    if (total > kMaxMenuItems) return false;
+    children.clear(); children.reserve(count);
+    for (std::uint16_t i = 0; i < count; ++i) {
+        if (!HasBytes(position, 20, payload.size())) return false;
         ChildData child{};
-        const std::uint8_t kind = payload[position++];
-        const std::uint8_t flags = payload[position++];
-        const std::uint16_t reserved = ReadUInt16(payload.data() + position);
-        position += 2;
-
-        std::memcpy(child.token, payload.data() + position, sizeof(child.token));
-        position += sizeof(child.token);
-
-        if (kind > 1 || (flags & 0xFE) != 0 || reserved != 0 ||
-            !ReadUtf8String(payload, position, child.title) ||
-            !ReadUtf8String(payload, position, child.icon)) {
-            return false;
-        }
-
+        const auto kind = payload[position++]; const auto flags = payload[position++];
+        const auto reserved = ReadUInt16(payload.data() + position); position += 2;
+        std::memcpy(child.token, payload.data() + position, 16); position += 16;
+        if (kind > 2 || flags != (kind == 1 ? 0 : 1) || reserved != 0 ||
+            !ReadUtf8String(payload, position, child.title) || !ReadUtf8String(payload, position, child.icon) ||
+            !ReadMenuItems(payload, position, child.children, depth + 1, total)) return false;
         child.isSeparator = kind == 1;
-        if (child.isSeparator) {
-            if (!child.title.empty() || !child.icon.empty() || !IsZeroToken(child.token)) {
-                return false;
-            }
-        } else if (IsZeroToken(child.token)) {
-            // Action 必须携带 Broker 签发的 opaque token，不能按索引猜命令。
-            return false;
-        }
-
+        if (kind == 1 && (!child.title.empty() || !child.icon.empty() || !IsZeroToken(child.token))) return false;
+        if (kind == 0 && IsZeroToken(child.token)) return false;
+        if (kind == 2 && (!IsZeroToken(child.token) || child.children.empty())) return false;
+        if (kind != 2 && !child.children.empty()) return false;
+        if (kind != 1 && child.title.empty()) return false;
+        // User icons are prepared .ico files. Never pass arbitrary UNC/DLL references to the shell.
+        if (!child.icon.empty() && (child.icon.starts_with(L"\\\\") ||
+            child.icon.size() < 4 || _wcsicmp(child.icon.c_str() + child.icon.size() - 4, L".ico") != 0)) return false;
         children.push_back(std::move(child));
     }
-
-    return position == payload.size();
+    return true;
+}
+bool ParseResolveResponse(const std::vector<std::uint8_t>& payload, std::vector<ChildData>& children) {
+    if (payload.size() < 3 || payload[0] > 1) return false;
+    std::size_t position = 1; unsigned int total = 0;
+    return ReadMenuItems(payload, position, children, 0, total) && position == payload.size();
 }
 
-bool ResolveCore(const std::wstring& directory, std::vector<ChildData>& children) {
+bool ResolveCore(const std::wstring& directory, std::vector<ChildData>& children, ULONGLONG deadline, const std::vector<SelectionData>& selection) {
     ScopedHandle pipe(OpenBrokerPipe());
     if (pipe.get() == INVALID_HANDLE_VALUE) {
         return false;
@@ -390,10 +397,20 @@ bool ResolveCore(const std::wstring& directory, std::vector<ChildData>& children
     requestPayload.reserve(sizeof(std::uint32_t) + encodedPath.size());
     AppendUInt32(requestPayload, static_cast<std::uint32_t>(encodedPath.size()));
     requestPayload.insert(requestPayload.end(), encodedPath.begin(), encodedPath.end());
+    if (selection.size() > 256) return false;
+    AppendUInt16(requestPayload, static_cast<std::uint16_t>(selection.size()));
+    for (const auto& item : selection) {
+        std::vector<std::uint8_t> encoded;
+        if (!ToUtf8(item.path, encoded)) return false;
+        requestPayload.push_back(item.folder ? 1 : 0);
+        AppendUInt32(requestPayload, static_cast<std::uint32_t>(encoded.size()));
+        requestPayload.insert(requestPayload.end(), encoded.begin(), encoded.end());
+        if (requestPayload.size() > kMaxPayloadBytes) return false;
+    }
+
 
     const std::vector<std::uint8_t> frame =
         BuildFrame(kResolveRequest, 1, requestPayload);
-    const ULONGLONG deadline = GetTickCount64() + kIpcDeadlineMs;
     if (!TimedIo(
             pipe.get(),
             true,
@@ -404,23 +421,13 @@ bool ResolveCore(const std::wstring& directory, std::vector<ChildData>& children
     }
 
     std::vector<std::uint8_t> responsePayload;
-    if (!ReadFrame(pipe.get(), kResolveResponse, deadline, responsePayload)) {
+    if (!ReadFrame(pipe.get(), kResolveResponse, 1, deadline, responsePayload)) {
         return false;
     }
-    return ParseResolveResponse(responsePayload, children);
+    return ParseResolveResponse(responsePayload, children) && GetTickCount64() < deadline;
 }
 
-bool Resolve(const std::wstring& directory, std::vector<ChildData>& children) noexcept {
-    try {
-        return ResolveCore(directory, children);
-    } catch (...) {
-        // 任何分配、编码或解析异常都只能导致 fallback，不能穿过 Explorer 边界。
-        children.clear();
-        return false;
-    }
-}
-
-bool InvokeTokenCore(const std::uint8_t token[16]) {
+bool InvokeTokenCore(const std::uint8_t token[16], ULONGLONG deadline) {
     ScopedHandle pipe(OpenBrokerPipe());
     if (pipe.get() == INVALID_HANDLE_VALUE) {
         return false;
@@ -429,7 +436,6 @@ bool InvokeTokenCore(const std::uint8_t token[16]) {
     std::vector<std::uint8_t> requestPayload(token, token + 16);
     const std::vector<std::uint8_t> frame =
         BuildFrame(kInvokeRequest, 2, requestPayload);
-    const ULONGLONG deadline = GetTickCount64() + kIpcDeadlineMs;
     if (!TimedIo(
             pipe.get(),
             true,
@@ -440,7 +446,7 @@ bool InvokeTokenCore(const std::uint8_t token[16]) {
     }
 
     std::vector<std::uint8_t> responsePayload;
-    if (!ReadFrame(pipe.get(), kInvokeResponse, deadline, responsePayload) ||
+    if (!ReadFrame(pipe.get(), kInvokeResponse, 2, deadline, responsePayload) ||
         responsePayload.size() != 1) {
         return false;
     }
@@ -449,48 +455,169 @@ bool InvokeTokenCore(const std::uint8_t token[16]) {
     return responsePayload[0] == 0;
 }
 
-bool InvokeToken(const std::uint8_t token[16]) noexcept {
+struct Request final {
+    ScopedHandle ready{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+    std::wstring directory;
+    std::vector<SelectionData> selection;
+    std::vector<ChildData> children;
+    std::uint8_t token[16]{};
+    ULONGLONG deadline = 0;
+    HMODULE module = nullptr;
+    bool invoke = false;
+    bool success = false;
+    std::atomic_bool completed = false;
+};
+
+DWORD WINAPI RequestWorker(void* context) noexcept {
+    auto holder = std::unique_ptr<std::shared_ptr<Request>>(
+        static_cast<std::shared_ptr<Request>*>(context));
+    auto request = *holder;
+    holder.reset();
+    const HMODULE module = request->module;
     try {
-        return InvokeTokenCore(token);
-    } catch (...) {
-        return false;
-    }
+        if (GetTickCount64() < request->deadline) {
+            request->success = request->invoke
+                ? InvokeTokenCore(request->token, request->deadline)
+                : ResolveCore(request->directory, request->children, request->deadline, request->selection);
+        }
+    } catch (...) { request->success = false; }
+    request->completed.store(true, std::memory_order_release);
+    SetEvent(request->ready.get());
+    request.reset();
+    --g_pendingRequests;
+    --g_objectCount;
+    FreeLibraryAndExitThread(module, 0);
 }
 
-bool ExtractFilesystemPath(IShellItemArray* items, std::wstring& path) noexcept {
-    try {
-        if (items == nullptr) {
-            return false;
-        }
-
-        DWORD itemCount = 0;
-        if (FAILED(items->GetCount(&itemCount)) || itemCount == 0) {
-            return false;
-        }
-
-        IShellItem* item = nullptr;
-        if (FAILED(items->GetItemAt(0, &item)) || item == nullptr) {
-            return false;
-        }
-
-        PWSTR displayName = nullptr;
-        const HRESULT hr = item->GetDisplayName(SIGDN_FILESYSPATH, &displayName);
-        item->Release();
-        if (FAILED(hr) || displayName == nullptr) {
-            return false;
-        }
-
-        std::wstring extracted(displayName);
-        CoTaskMemFree(displayName);
-        if (extracted.empty()) {
-            return false;
-        }
-
-        path.swap(extracted);
-        return true;
-    } catch (...) {
-        return false;
+bool RunRequest(const std::shared_ptr<Request>& request) noexcept {
+    auto pending = g_pendingRequests.load();
+    do {
+        if (pending >= kMaxPendingRequests) return false;
+    } while (!g_pendingRequests.compare_exchange_weak(pending, pending + 1));
+    ++g_objectCount;
+    if (!request->ready.get() || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+            reinterpret_cast<LPCWSTR>(&__ImageBase), &request->module)) {
+        --g_pendingRequests; --g_objectCount; return false;
     }
+    auto* holder = new (std::nothrow) std::shared_ptr<Request>(request);
+    const HANDLE thread = holder ? CreateThread(nullptr, 0, RequestWorker, holder, 0, nullptr) : nullptr;
+    if (!thread) {
+        delete holder;
+        FreeLibrary(request->module);
+        --g_pendingRequests; --g_objectCount; return false;
+    }
+    CloseHandle(thread);
+    const auto now = GetTickCount64();
+    const auto waitMs = now >= request->deadline ? 0 : static_cast<DWORD>(request->deadline - now);
+    if (WaitForSingleObject(request->ready.get(), waitMs) != WAIT_OBJECT_0) return false;
+    return request->completed.load(std::memory_order_acquire) && request->success
+        && GetTickCount64() < request->deadline;
+}
+
+bool Resolve(const std::wstring& directory, std::vector<ChildData>& children, const std::vector<SelectionData>& selection = {}) noexcept {
+    const auto deadline = GetTickCount64() + kIpcDeadlineMs;
+    try {
+        if (directory.size() > kMaxStringBytes) return false;
+        auto request = std::make_shared<Request>();
+        request->deadline = deadline;
+        request->directory = directory;
+        request->selection = selection;
+        if (!RunRequest(request)) return false;
+        children = std::move(request->children);
+        return true;
+    } catch (...) { children.clear(); return false; }
+}
+
+bool InvokeToken(const std::uint8_t token[16]) noexcept {
+    const auto deadline = GetTickCount64() + kIpcDeadlineMs;
+    try {
+        auto request = std::make_shared<Request>();
+        request->deadline = deadline;
+        request->invoke = true;
+        std::memcpy(request->token, token, 16);
+        return RunRequest(request);
+    } catch (...) { return false; }
+}
+
+// Short state copies only. Never hold this lock across Shell/COM calls or IPC:
+// even an STA can be re-entered while making an outgoing COM call.
+class StateLock final {
+public:
+    explicit StateLock(SRWLOCK& lock) noexcept : lock_(lock) { AcquireSRWLockExclusive(&lock_); }
+    ~StateLock() noexcept { ReleaseSRWLockExclusive(&lock_); }
+    StateLock(const StateLock&) = delete;
+    StateLock& operator=(const StateLock&) = delete;
+private:
+    SRWLOCK& lock_;
+};
+
+template<class T> class ComPtr final {
+public:
+    ComPtr() noexcept = default;
+    ComPtr(const ComPtr&) = delete;
+    ComPtr& operator=(const ComPtr&) = delete;
+    T* value = nullptr;
+    ~ComPtr() { if (value) value->Release(); }
+    T* operator->() const noexcept { return value; }
+};
+bool ItemPath(IShellItem* item, std::wstring& path) {
+    if (!item) return false;
+    PWSTR text = nullptr;
+    if (FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &text)) || !text) return false;
+    try { path = text; } catch (...) { CoTaskMemFree(text); throw; }
+    CoTaskMemFree(text);
+    return !path.empty() && path.size() <= kMaxStringBytes;
+}
+bool ViewDirectory(IUnknown* site, std::wstring& path) {
+    if (!site) return false;
+    ComPtr<IServiceProvider> provider;
+    if (FAILED(site->QueryInterface(IID_PPV_ARGS(&provider.value))) || !provider.value) return false;
+    ComPtr<IFolderView> view;
+    if (FAILED(provider->QueryService(SID_SFolderView, IID_PPV_ARGS(&view.value))) || !view.value) {
+        ComPtr<IShellBrowser> browser;
+        ComPtr<IShellView> shellView;
+        if (FAILED(provider->QueryService(SID_STopLevelBrowser, IID_PPV_ARGS(&browser.value))) || !browser.value ||
+            FAILED(browser->QueryActiveShellView(&shellView.value)) || !shellView.value ||
+            FAILED(shellView->QueryInterface(IID_PPV_ARGS(&view.value))) || !view.value) return false;
+    }
+    ComPtr<IPersistFolder2> folder;
+    if (FAILED(view->GetFolder(IID_PPV_ARGS(&folder.value))) || !folder.value) return false;
+    PIDLIST_ABSOLUTE pidl = nullptr;
+    if (FAILED(folder->GetCurFolder(&pidl)) || !pidl) return false;
+    ComPtr<IShellItem> item;
+    const auto hr = SHCreateItemFromIDList(pidl, IID_PPV_ARGS(&item.value));
+    CoTaskMemFree(pidl);
+    return SUCCEEDED(hr) && ItemPath(item.value, path);
+}
+bool CaptureContext(IUnknown* site, IShellItemArray* items, std::wstring& directory, std::vector<SelectionData>& selection) noexcept {
+    try {
+        directory.clear(); selection.clear();
+        DWORD count = 0;
+        if (items && FAILED(items->GetCount(&count))) return false;
+        if (count == 0) return ViewDirectory(site, directory);
+        if (count > 256) return false;
+        for (DWORD i = 0; i < count; ++i) {
+            ComPtr<IShellItem> item;
+            if (FAILED(items->GetItemAt(i, &item.value)) || !item.value) return false;
+            SFGAOF attributes = 0;
+            if (FAILED(item->GetAttributes(SFGAO_FILESYSTEM | SFGAO_FOLDER, &attributes)) || !(attributes & SFGAO_FILESYSTEM)) return false;
+            SelectionData selected;
+            if (!ItemPath(item.value, selected.path)) return false;
+            selected.folder = (attributes & SFGAO_FOLDER) != 0;
+            selection.push_back(std::move(selected));
+        }
+        if (selection.size() == 1 && selection[0].folder) { directory = selection[0].path; return true; }
+        auto parent = [](const std::wstring& path) {
+            const auto slash = path.find_last_of(L"\\/");
+            if (slash == std::wstring::npos) return std::wstring{};
+            return path.substr(0, slash == 2 && path[1] == L':' ? 3 : slash);
+        };
+        directory = parent(selection[0].path);
+        for (const auto& item : selection)
+            if (_wcsicmp(directory.c_str(), parent(item.path).c_str()) != 0) { directory.clear(); break; }
+        // Search results may span directories: keep selection, leave directory absent.
+        return true;
+    } catch (...) { directory.clear(); selection.clear(); return false; }
 }
 
 HRESULT CopyStringToTaskMemory(const wchar_t* value, LPWSTR* output) noexcept {
@@ -520,7 +647,7 @@ HRESULT CopyStringToTaskMemory(const wchar_t* value, LPWSTR* output) noexcept {
 
 class CommandEnumerator;
 
-class ExplorerCommand final : public IExplorerCommand {
+class ExplorerCommand final : public IExplorerCommand, public IObjectWithSite {
 public:
     explicit ExplorerCommand(bool root) noexcept : isRoot_(root) {
         ++g_objectCount;
@@ -532,6 +659,8 @@ public:
     }
 
     ~ExplorerCommand() noexcept {
+        auto* site = std::exchange(site_, nullptr);
+        if (site) site->Release();
         --g_objectCount;
     }
 
@@ -546,9 +675,36 @@ public:
             AddRef();
             return S_OK;
         }
+        if (iid == IID_IObjectWithSite) { *result = static_cast<IObjectWithSite*>(this); AddRef(); return S_OK; }
         return E_NOINTERFACE;
     }
 
+    HRESULT SetSite(IUnknown* site) noexcept override {
+        if (site) site->AddRef();
+        IUnknown* previous = nullptr;
+        {
+            StateLock lock(stateLock_);
+            previous = std::exchange(site_, site);
+            ++contextGeneration_;
+            contextValid_ = false;
+            currentDirectory_.clear();
+            selection_.clear();
+        }
+        // Publish the new site before releasing the old one: Release may re-enter us.
+        if (previous) previous->Release();
+        return S_OK;
+    }
+    HRESULT GetSite(REFIID iid, void** value) noexcept override {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        ComPtr<IUnknown> site;
+        {
+            StateLock lock(stateLock_);
+            site.value = site_;
+            if (site.value) site->AddRef();
+        }
+        return site.value ? site->QueryInterface(iid, value) : E_FAIL;
+    }
     ULONG AddRef() noexcept override {
         return ++referenceCount_;
     }
@@ -577,7 +733,9 @@ public:
             ? L"%SystemRoot%\\System32\\shell32.dll,-167"
             : data_.icon.c_str();
         if (*iconRef == L'\0') {
-            return S_FALSE;
+            // S_FALSE is still SUCCEEDED(hr). Explorer consumes the returned
+            // string on any successful HRESULT, so success + nullptr crashes it.
+            return E_NOTIMPL;
         }
         return CopyStringToTaskMemory(iconRef, icon);
     }
@@ -594,7 +752,10 @@ public:
         if (value == nullptr) {
             return E_POINTER;
         }
-        *value = kClsid;
+        // Dynamic groups/separators have no registered canonical verb. In particular,
+        // they must not masquerade as the root command by returning its CLSID.
+        *value = isRoot_ ? kClsid : GUID_NULL;
+        if (!isRoot_ && !IsZeroToken(data_.token)) std::memcpy(value, data_.token, 16);
         return S_OK;
     }
 
@@ -604,16 +765,29 @@ public:
         }
 
         *state = ECS_ENABLED;
-        if (isRoot_ && fOkToBeSlow) {
-            // Explorer 不允许慢操作时不触碰 IShellItemArray；动态解析在 EnumSubCommands 执行。
-            std::wstring path;
-            if (ExtractFilesystemPath(items, path)) {
-                currentDirectory_.swap(path);
-            } else {
-                currentDirectory_.clear();
-            }
-        } else if (isRoot_) {
+        if (!isRoot_) return S_OK;
+        ComPtr<IUnknown> site;
+        unsigned long long generation = 0;
+        {
+            StateLock lock(stateLock_);
+            generation = ++contextGeneration_;
+            // A fast query for a new selection must not leave the previous menu active.
+            contextValid_ = false;
             currentDirectory_.clear();
+            selection_.clear();
+            if (!fOkToBeSlow) return E_PENDING;
+            site.value = site_;
+            if (site.value) site->AddRef();
+        }
+        std::wstring directory;
+        std::vector<SelectionData> selection;
+        const bool valid = CaptureContext(site.value, items, directory, selection);
+        {
+            StateLock lock(stateLock_);
+            if (generation != contextGeneration_) return E_PENDING;
+            currentDirectory_ = std::move(directory);
+            selection_ = std::move(selection);
+            contextValid_ = valid;
         }
         return S_OK;
     }
@@ -622,7 +796,7 @@ public:
         if (flags == nullptr) {
             return E_POINTER;
         }
-        *flags = isRoot_
+        *flags = (isRoot_ || !data_.children.empty())
             ? ECF_HASSUBCOMMANDS
             : (data_.isSeparator ? ECF_ISSEPARATOR : ECF_DEFAULT);
         return S_OK;
@@ -632,10 +806,14 @@ public:
     HRESULT EnumSubCommands(IEnumExplorerCommand** result) noexcept override;
 
 private:
-    ULONG referenceCount_ = 1;
+    SRWLOCK stateLock_ = SRWLOCK_INIT;
+    unsigned long long contextGeneration_ = 0;
+    IUnknown* site_ = nullptr;
+    bool contextValid_ = false;
+    std::vector<SelectionData> selection_;
+    std::atomic_ulong referenceCount_ = 1;
     bool isRoot_ = false;
     ChildData data_{};
-    std::vector<ChildData> children_;
     std::wstring currentDirectory_;
 };
 
@@ -678,45 +856,44 @@ public:
 
     HRESULT Next(ULONG count, IExplorerCommand** output,
                  ULONG* fetched) noexcept override {
-        if (output == nullptr) {
-            return E_POINTER;
-        }
-        if (count != 1 && fetched == nullptr) {
-            return E_INVALIDARG;
-        }
-
+        if (fetched) *fetched = 0;
+        if (!output) return E_POINTER;
+        // pceltFetched is optional for this interface, including multi-element calls.
+        for (ULONG i = 0; i < count; ++i) output[i] = nullptr;
+        StateLock lock(stateLock_);
         ULONG copied = 0;
         try {
-            while (copied < count && index_ < items_.size()) {
-                output[copied] = new (std::nothrow) ExplorerCommand(items_[index_++]);
-                if (output[copied] == nullptr) {
-                    if (fetched != nullptr) {
-                        *fetched = copied;
-                    }
-                    return E_OUTOFMEMORY;
-                }
+            while (copied < count && index_ + copied < items_.size()) {
+#ifdef SHELLCOMMAND_NATIVE_TEST
+                if (g_testCommandAllocationsBeforeFailure == 0) throw std::bad_alloc();
+                if (g_testCommandAllocationsBeforeFailure > 0) --g_testCommandAllocationsBeforeFailure;
+#endif
+                output[copied] = new ExplorerCommand(items_[index_ + copied]);
                 ++copied;
             }
         } catch (...) {
-            if (fetched != nullptr) {
-                *fetched = copied;
+            // An HRESULT failure transfers no interface ownership, and does not
+            // advance the cursor. Never expose a half-filled array to the marshaler.
+            for (ULONG i = 0; i < copied; ++i) {
+                output[i]->Release();
+                output[i] = nullptr;
             }
             return E_OUTOFMEMORY;
         }
-
-        if (fetched != nullptr) {
-            *fetched = copied;
-        }
+        index_ += copied;
+        if (fetched) *fetched = copied;
         return copied == count ? S_OK : S_FALSE;
     }
 
     HRESULT Skip(ULONG count) noexcept override {
+        StateLock lock(stateLock_);
         const std::size_t remaining = items_.size() - index_;
         index_ += static_cast<ULONG>(std::min<std::size_t>(count, remaining));
-        return index_ < items_.size() ? S_OK : S_FALSE;
+        return count <= remaining ? S_OK : S_FALSE;
     }
 
     HRESULT Reset() noexcept override {
+        StateLock lock(stateLock_);
         index_ = 0;
         return S_OK;
     }
@@ -728,6 +905,7 @@ public:
         *result = nullptr;
 
         try {
+            StateLock lock(stateLock_);
             auto* clone = new (std::nothrow) CommandEnumerator(items_);
             if (clone == nullptr) {
                 return E_OUTOFMEMORY;
@@ -741,8 +919,9 @@ public:
     }
 
 private:
-    ULONG referenceCount_ = 1;
-    std::vector<ChildData> items_;
+    std::atomic_ulong referenceCount_ = 1;
+    SRWLOCK stateLock_ = SRWLOCK_INIT;
+    const std::vector<ChildData> items_;
     std::size_t index_ = 0;
 };
 
@@ -751,25 +930,38 @@ HRESULT ExplorerCommand::EnumSubCommands(IEnumExplorerCommand** result) noexcept
         return E_POINTER;
     }
     *result = nullptr;
-    if (!isRoot_) {
-        return E_NOTIMPL;
-    }
+    if (!isRoot_ && data_.children.empty()) return E_NOTIMPL;
 
     try {
-        children_.clear();
-        if (!currentDirectory_.empty()) {
-            Resolve(currentDirectory_, children_);
+        std::vector<ChildData> children;
+        if (!isRoot_) children = data_.children;
+        else {
+            std::wstring directory;
+            std::vector<SelectionData> selection;
+            bool valid = false;
+            unsigned long long generation = 0;
+            {
+                StateLock lock(stateLock_);
+                valid = contextValid_;
+                generation = contextGeneration_;
+                if (valid) { directory = currentDirectory_; selection = selection_; }
+            }
+            if (valid) Resolve(directory, children, selection);
+            {
+                StateLock lock(stateLock_);
+                if (generation != contextGeneration_) children.clear();
+            }
         }
 
-        if (children_.empty()) {
+        if (children.empty()) {
             // Broker 不可用、路径不可用或响应非法时，始终保留最小可用入口。
             ChildData fallback;
-            fallback.title = L"Open ShellCommand 11";
+            fallback.title = L"设置…";
             fallback.isFallback = true;
-            children_.push_back(std::move(fallback));
+            children.push_back(std::move(fallback));
         }
 
-        auto* enumerator = new (std::nothrow) CommandEnumerator(std::move(children_));
+        auto* enumerator = new (std::nothrow) CommandEnumerator(std::move(children));
         if (enumerator == nullptr) {
             return E_OUTOFMEMORY;
         }
@@ -813,6 +1005,8 @@ HRESULT ExplorerCommand::Invoke(IShellItemArray*, IBindCtx*) noexcept {
 
 class Factory final : public IClassFactory {
 public:
+    Factory() noexcept { ++g_objectCount; }
+    ~Factory() noexcept { --g_objectCount; }
     HRESULT QueryInterface(REFIID iid, void** result) noexcept override {
         if (result == nullptr) {
             return E_POINTER;
@@ -840,13 +1034,11 @@ public:
     }
 
     HRESULT CreateInstance(IUnknown* outer, REFIID iid, void** result) noexcept override {
-        if (outer != nullptr) {
-            return CLASS_E_NOAGGREGATION;
-        }
         if (result == nullptr) {
             return E_POINTER;
         }
         *result = nullptr;
+        if (outer != nullptr) return CLASS_E_NOAGGREGATION;
 
         auto* command = new (std::nothrow) ExplorerCommand(true);
         if (command == nullptr) {
@@ -868,7 +1060,7 @@ public:
     }
 
 private:
-    ULONG referenceCount_ = 1;
+    std::atomic_ulong referenceCount_ = 1;
 };
 
 } // namespace

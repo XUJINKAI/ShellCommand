@@ -42,6 +42,6 @@
 
 - https://github.com/XUJINKAI/ShellCommand
 
-旧项目的 README、`DirectoryCommand.cs`、`global.template.shellcommand.yaml` 是 V11 配置兼容性的事实来源之一。
+旧项目仅供了解原有用途。v2 不支持旧配置，也不提供迁移器。
 
 旧代码架构（SharpShell、WinForms ContextMenuStrip、.NET Framework 4.7.2）不是 V11 实现参考。

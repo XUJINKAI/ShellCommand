@@ -37,7 +37,8 @@ try {
         'ShellCommand.Broker.exe',
         'ShellCommand.Explorer.dll',
         'AppxManifest.xml',
-        'Uninstall.cmd')
+        'Uninstall.cmd',
+        'build-manifest.json')
 
     $missing = @($required | Where-Object { $names -notcontains $_ })
     if ($missing.Count -gt 0) {

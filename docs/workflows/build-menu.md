@@ -1,91 +1,13 @@
-# Workflow: Build Menu
+# 菜单构建流程
 
-## Trigger
+背景、文件、文件夹及多选共用 v2 上下文。原生层提取文件系统路径；虚拟对象隐藏命令，跨目录选择保留选择项而不编造 directory。
 
-用户在 Windows 11 文件夹背景执行右键，Explorer 构造 ShellCommand 子菜单。
+1. Explorer 原生扩展发送一次限时 Resolve 请求。
+2. Broker 只读内存中的全局/本地有效快照和目录事实。首次访问或过期时入有界准备队列，本次请求不等待。
+3. Core 执行三值条件、完整 ID 覆盖、变量展开、分隔线整理和组过滤。
+4. 冻结执行计划，签发单次 token，返回有限大小的递归菜单 DTO。
+5. 原生映射标题、稳定本地 ico 引用、分组与 token。失败退化为「设置…」。
 
-## Participants
+配置、目录枚举、图标提取在隔离准备进程中进行。全局及最近本地固定磁盘目录使用有界文件事件监听；其他目录下次访问异步检查。准备超时后结束并回收该子进程，再释放并发额度。
 
-```text
-Explorer
-ShellCommand.Explorer
-ShellCommand.Broker
-Config Runtime
-Custom Menu
-```
-
-## Flow
-
-```text
-Explorer asks for subcommands
-        │
-        ▼
-Explorer DLL resolves working directory
-        │
-        ├── no filesystem path → fallback only
-        │
-        ▼
-ResolveMenuRequest(path)
-        │
-        ├── pipe unavailable/timeout → fallback only
-        │
-        ▼
-Broker gets Global Config LKG/cache
-        │
-        ▼
-Broker probes local .shellcommand.yaml metadata
-        │
-        ├── cached unchanged → reuse parsed config
-        ├── changed with LKG → use LKG now, queue refresh
-        └── first-seen → bounded parse or defer local config
-        │
-        ▼
-Custom Menu evaluates Match lazily
-        │
-        ▼
-Normalize + issue ActionTokens
-        │
-        ▼
-ResolveMenuResponse
-        │
-        ▼
-Explorer maps DTO to IExplorerCommand children
-        │
-        ▼
-Menu shown
-```
-
-## Timing Semantics
-
-Explorer hard deadline dominates correctness of “latest file contents”。
-
-如果 local config 刚刚变化但无法在预算内完成刷新，允许本次菜单使用 Last Known Good；不允许让 Explorer 等待。
-
-## Fallback
-
-任何 Broker/IPC 失败：
-
-```text
-ShellCommand >
-    Open ShellCommand 11
-```
-
-不弹错误。
-
-## No Commands
-
-即使没有用户 command，正常 Broker 响应仍至少包含 `Open ShellCommand 11`，以及按配置启用的 built-in actions。
-
-## Verification
-
-测试至少覆盖：
-
-- no local config；
-- valid local + global；
-- Match changes after file creation/deletion；
-- invalid local with LKG；
-- invalid local without LKG；
-- Broker unavailable；
-- slow Broker；
-- Unicode path；
-- 100 items boundary。
+目录事实过期时为 unknown，包括 not exists，不使用过期结果误报命中。配置错误使用已验证的 v2 Last Known Good；确认删除清除该来源。编辑器预览使用相同准备和 Core 解析，但不发布未保存快照。

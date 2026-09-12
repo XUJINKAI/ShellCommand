@@ -1,7 +1,8 @@
 #pragma warning disable CA1416
 using Microsoft.Win32;
 using System.Text.Json;
-using ShellCommand.Core;
+using System.Diagnostics;
+using System.Text;
 
 namespace ShellCommand.Broker;
 
@@ -47,7 +48,39 @@ public sealed class ContextMenuScanner
             foreach (var (path, scope) in StaticScopes) ScanStatic(baseKey, hive.Item2, path, scope, result);
             foreach (var (path, scope) in ComScopes) ScanCom(baseKey, hive.Item2, path, scope, result);
         }
+        result.AddRange(ScanPackaged());
         return result;
+    }
+
+    private static MenuEntry[] ScanPackaged()
+    {
+        const string script = """$ErrorActionPreference='Stop'; $result=@(); Get-AppxPackage | Select-Object -First 500 | ForEach-Object { $p=$_; try { $m=Get-AppxPackageManifest -Package $p.PackageFullName; foreach($v in $m.SelectNodes("//*[local-name()='FileExplorerContextMenus']//*[local-name()='Verb']")) { $result+=@{ Name=$p.Name; Id=$v.Id; Clsid=$v.Clsid; Package=$p.PackageFullName } } } catch {} }; ConvertTo-Json -InputObject @($result) -Compress""";
+        try
+        {
+            using var process = new Process { StartInfo = new("powershell.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true } };
+            foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-EncodedCommand", Convert.ToBase64String(Encoding.Unicode.GetBytes(script)) }) process.StartInfo.ArgumentList.Add(argument);
+            process.Start();
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var output = SnapshotRuntime.ReadBoundedAsync(process.StandardOutput, 512 * 1024, deadline.Token);
+            var errors = SnapshotRuntime.ReadBoundedAsync(process.StandardError, 32768, deadline.Token);
+            try
+            {
+                process.WaitForExitAsync(deadline.Token).GetAwaiter().GetResult();
+                var json = output.GetAwaiter().GetResult(); errors.GetAwaiter().GetResult();
+                if (process.ExitCode != 0) throw new InvalidOperationException("现代菜单扫描失败。");
+                using var parsed = JsonDocument.Parse(json);
+                return parsed.RootElement.EnumerateArray().Select(value => new MenuEntry(
+                    value.GetProperty("Package").GetString() + ":" + value.GetProperty("Id").GetString(),
+                    value.GetProperty("Name").GetString() + " · " + value.GetProperty("Id").GetString(),
+                    MenuEntryType.PackagedExplorerCommand, MenuScope.Other, MenuEntryState.ReadOnly, "Package", value.GetProperty("Package").GetString()!,
+                    value.GetProperty("Clsid").GetString(), null, false)).ToArray();
+            }
+            finally { if (!process.HasExited) process.Kill(true); }
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or OperationCanceledException or JsonException or System.ComponentModel.Win32Exception)
+        {
+            return [new("packaged-diagnostic", "现代菜单扫描不可用：" + ex.Message, MenuEntryType.SystemUnknown, MenuScope.Other, MenuEntryState.ReadOnly, "Windows", "", null, null, false)];
+        }
     }
 
     private static void ScanStatic(RegistryKey baseKey, string hive, string path, MenuScope scope, List<MenuEntry> result)
@@ -59,7 +92,8 @@ public sealed class ContextMenuScanner
             using var verb = shell.OpenSubKey(name);
             if (verb is null) continue;
             var display = verb.GetValue(null) as string ?? name;
-            var command = verb.OpenSubKey("command")?.GetValue(null) as string;
+            using var commandKey = verb.OpenSubKey("command");
+            var command = commandKey?.GetValue(null) as string;
             var hidden = verb.GetValue("ProgrammaticAccessOnly") is not null;
             var canModify = hive == "HKCU";
             result.Add(new MenuEntry($"{hive}:{path}:{name}", display, MenuEntryType.StaticVerb, scope, hidden ? MenuEntryState.HiddenByVerb : (canModify ? MenuEntryState.Enabled : MenuEntryState.ReadOnly), hive, $"{path}\\{name}", null, command, canModify));
@@ -75,14 +109,16 @@ public sealed class ContextMenuScanner
         {
             using var handler = handlers.OpenSubKey(name);
             var clsid = handler?.GetValue(null) as string;
+            using var server = clsid is null ? null : baseKey.OpenSubKey("CLSID\\" + clsid + "\\InprocServer32");
+            var module = server?.GetValue(null) as string;
             var isBlocked = clsid is not null && blocked?.GetValue(clsid) is not null;
-            result.Add(new MenuEntry($"{hive}:{path}:{name}", name, MenuEntryType.LegacyCom, scope, isBlocked ? MenuEntryState.Blocked : MenuEntryState.Enabled, hive, $"{path}\\{name}", clsid, null, clsid is not null));
+            result.Add(new MenuEntry($"{hive}:{path}:{name}", name, MenuEntryType.LegacyCom, scope, isBlocked ? MenuEntryState.Blocked : MenuEntryState.Enabled, hive, $"{path}\\{name}", clsid, module, Guid.TryParse(clsid, out _)));
         }
     }
 
     private static RegistryKey? OpenClasses(RegistryHive hive, bool writable)
     {
-        try { return RegistryKey.OpenBaseKey(hive, RegistryView.Default).OpenSubKey("Software\\Classes", writable); }
+        try { using var key = RegistryKey.OpenBaseKey(hive, RegistryView.Default); return key.OpenSubKey("Software\\Classes", writable); }
         catch (Exception) { return null; }
     }
 }
@@ -102,66 +138,102 @@ public sealed class ContextMenuManager
 
     public MenuOperationResult Disable(MenuEntry entry)
     {
-        if (!entry.CanModify) return new(false, "This menu entry is read-only.");
         try
         {
+            using var operationLock = Lock();
             var (path, valueName) = Target(entry);
+            var journal = ReadJournal(); // Corruption blocks mutation before opening a writable key.
             using var key = OpenTarget(entry, writable: true);
-            if (key is null) return new(false, "The registry entry is no longer available.");
+            if (key is null) return new(false, "注册项已经不存在。");
             var previous = Capture(key, valueName);
-            var applied = entry.Type == MenuEntryType.StaticVerb ? new RegistryValueSnapshot(true, RegistryValueKind.String, string.Empty) : new RegistryValueSnapshot(true, RegistryValueKind.String, string.Empty);
+            var applied = new RegistryValueSnapshot(true, RegistryValueKind.String, string.Empty);
+            var existing = journal.LastOrDefault(r => !r.Restored && r.TargetPath == path && r.ValueName == valueName);
+            if (existing is not null)
+            {
+                if (Matches(key, valueName, existing.Applied)) { WriteJournal(existing with { Committed = true }); return new(true, "此项已经禁用。"); }
+                return new(false, "存在待恢复的修改记录，请先恢复后再操作。");
+            }
+            if (previous == applied) return new(false, "此项已被其他程序禁用，ShellCommand 不接管它的恢复。");
             var record = new JournalRecord(Guid.NewGuid().ToString("N"), DateTimeOffset.UtcNow, entry, path, valueName, previous, applied, false, false);
             WriteJournal(record);
             key.SetValue(valueName, string.Empty, RegistryValueKind.String);
-            if (!Matches(key, valueName, applied)) return new(false, "The registry write could not be verified.");
+            if (!Matches(key, valueName, applied)) return new(false, "注册表写入校验失败，已保留恢复记录。");
             WriteJournal(record with { Committed = true });
-            return new(true, "Entry disabled. Explorer restart may be required.", true);
+            return new(true, "已禁用；资源管理器可能需要重新启动。", true);
         }
-        catch (UnauthorizedAccessException) { return new(false, "Permission denied. Retry from an explicit elevated action."); }
-        catch (IOException ex) { return new(false, ex.Message); }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or InvalidDataException or JsonException or InvalidOperationException or ArgumentException)
+        { return new(false, "未完成修改：" + ex.Message); }
     }
 
     public MenuOperationResult Restore(MenuEntry entry)
     {
         try
         {
-            var records = ReadJournal().Where(x => x.Committed && !x.Restored && x.Entry.Id == entry.Id).ToArray();
-            if (records.Length == 0) return new(false, "No committed ShellCommand change exists for this entry.");
-            var record = records[^1];
+            using var operationLock = Lock();
+            var (path, valueName) = Target(entry);
+            // Include Prepared records: a crash may happen between the registry write and commit.
+            var record = ReadJournal().LastOrDefault(r => !r.Restored && r.TargetPath == path && r.ValueName == valueName);
+            if (record is null) return new(false, "没有本程序保存的恢复记录。");
             using var key = OpenTarget(entry, writable: true);
-            if (key is null) return new(false, "The registry entry is no longer available.");
-            if (!Matches(key, record.ValueName, record.Applied)) return new(false, "External change detected; restore was not applied.");
-            RestoreValue(key, record.ValueName, record.Previous);
+            if (key is null) return new(false, "注册项已经不存在。");
+            if (!Matches(key, valueName, record.Previous))
+            {
+                if (!Matches(key, valueName, record.Applied)) return new(false, "检测到外部修改，未覆盖当前值。");
+                RestoreValue(key, valueName, record.Previous);
+                if (!Matches(key, valueName, record.Previous)) return new(false, "恢复校验失败，恢复记录已保留。");
+            }
             WriteJournal(record with { Restored = true });
-            return new(true, "Entry restored. Explorer restart may be required.", true);
+            return new(true, "已恢复；资源管理器可能需要重新启动。", true);
         }
-        catch (UnauthorizedAccessException) { return new(false, "Permission denied. Retry from an explicit elevated action."); }
-        catch (IOException ex) { return new(false, ex.Message); }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or InvalidDataException or JsonException or InvalidOperationException or ArgumentException)
+        { return new(false, "未完成恢复：" + ex.Message); }
     }
-
-    private static (string Path, string ValueName) Target(MenuEntry entry)
-        => entry.Type == MenuEntryType.StaticVerb ? (entry.RegistrationPath, "ProgrammaticAccessOnly") : (@"Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked", entry.Clsid ?? string.Empty);
-
-    private static RegistryKey? OpenTarget(MenuEntry entry, bool writable)
-    {
-        if (entry.Type == MenuEntryType.StaticVerb) return Registry.CurrentUser.OpenSubKey($"Software\\Classes\\{entry.RegistrationPath}", writable);
-        return Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked", writable);
-    }
-
-    private void WriteJournal(JournalRecord record)
+    private FileStream Lock()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(_journalPath)!);
-        var all = ReadJournal().Where(x => x.OperationId != record.OperationId).Append(record).ToArray();
-        var temp = _journalPath + ".tmp";
-        File.WriteAllText(temp, JsonSerializer.Serialize(all, JournalJsonOptions));
-        File.Move(temp, _journalPath, true);
+        return new FileStream(_journalPath + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
     }
-
+    private static readonly string[] WritableScopes = new[] { "*\\shell\\", "Directory\\shell\\", "Directory\\Background\\shell\\", "Drive\\shell\\", "AllFilesystemObjects\\shell\\" };
+    private static (string Path, string ValueName) Target(MenuEntry entry)
+    {
+        if (entry.Type == MenuEntryType.StaticVerb && entry.Source == "HKCU" &&
+            WritableScopes.Any(p => entry.RegistrationPath.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
+            return (entry.RegistrationPath, "ProgrammaticAccessOnly");
+        if (entry.Type == MenuEntryType.LegacyCom && Guid.TryParse(entry.Clsid, out var clsid))
+            return (@"Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked", clsid.ToString("B"));
+        throw new InvalidOperationException("此项只读，不能通过当前用户机制修改。");
+    }
+    private static RegistryKey? OpenTarget(MenuEntry entry, bool writable)
+    {
+        var (path, _) = Target(entry);
+        return entry.Type == MenuEntryType.StaticVerb ? Registry.CurrentUser.OpenSubKey("Software\\Classes\\" + path, writable)
+            : writable ? Registry.CurrentUser.CreateSubKey(path) : Registry.CurrentUser.OpenSubKey(path);
+    }
+    private void WriteJournal(JournalRecord record)
+    {
+        var all = ReadJournal().Where(x => x.OperationId != record.OperationId).Append(record).ToArray();
+        var json = JsonSerializer.Serialize(all, JournalJsonOptions);
+        if (all.Length > 4096 || Encoding.UTF8.GetByteCount(json) > 4 * 1024 * 1024)
+            throw new InvalidOperationException("恢复记录已达到容量限制，请先归档记录；未修改注册表。");
+        var temp = _journalPath + ".tmp";
+        File.WriteAllText(temp, json); File.Move(temp, _journalPath, true);
+    }
     private JournalRecord[] ReadJournal()
     {
-        if (!File.Exists(_journalPath)) return Array.Empty<JournalRecord>();
-        try { return JsonSerializer.Deserialize<JournalRecord[]>(File.ReadAllText(_journalPath)) ?? Array.Empty<JournalRecord>(); }
-        catch (JsonException) { return Array.Empty<JournalRecord>(); }
+        string text;
+        try { text = Preparation.ReadText(_journalPath, 4 * 1024 * 1024); }
+        catch (FileNotFoundException) { return []; }
+        catch (DirectoryNotFoundException) { return []; }
+        var records = JsonSerializer.Deserialize<JournalRecord[]>(text) ?? throw new InvalidDataException("恢复日志损坏；停止修改。");
+        if (records.Length > 4096) throw new InvalidDataException("恢复日志过大。");
+        foreach (var record in records)
+        {
+            if (record?.Entry is null || record.Entry.RegistrationPath is null) throw new InvalidDataException("恢复日志内容非法；停止修改。");
+            var target = Target(record.Entry);
+            if (target.Path != record.TargetPath || target.ValueName != record.ValueName || record.Previous is null || record.Applied is null)
+                throw new InvalidDataException("恢复日志内容非法；停止修改。");
+        }
+        return records;
     }
 
     private static RegistryValueSnapshot Capture(RegistryKey key, string name)
@@ -180,7 +252,7 @@ public sealed class ContextMenuManager
         if (!snapshot.Exists) { key.DeleteValue(name, false); return; }
         object value = snapshot.Kind switch
         {
-            RegistryValueKind.Binary => Convert.FromBase64String(snapshot.Data ?? string.Empty),
+            RegistryValueKind.Binary or RegistryValueKind.None => Convert.FromBase64String(snapshot.Data ?? string.Empty),
             RegistryValueKind.MultiString => JsonSerializer.Deserialize<string[]>(snapshot.Data ?? "[]") ?? Array.Empty<string>(),
             RegistryValueKind.DWord => int.Parse(snapshot.Data ?? "0", System.Globalization.CultureInfo.InvariantCulture),
             RegistryValueKind.QWord => long.Parse(snapshot.Data ?? "0", System.Globalization.CultureInfo.InvariantCulture),

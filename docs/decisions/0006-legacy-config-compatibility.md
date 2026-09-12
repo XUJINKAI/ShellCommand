@@ -1,47 +1,7 @@
-# Decision 0006: Preserve Legacy Config Syntax, Fix Undefined Quirks
+# ShellCommand v2 — 0006-legacy-config-compatibility
 
-## Decision
+本契约以[已确认的完整设计](../redesign-v2.md)为准。仅支持 `version: 2`，不保留旧字段、旧命令行语法或配置迁移。
 
-V11 保留旧 ShellCommand 的主要配置名和 Match 语法：
+安装根固定为 `%LOCALAPPDATA%\ShellCommand11`，config 与 runner 分离。Core 是不可变数据、条件、变量与执行计划；准备进程处理 YAML/目录/图标；Broker 的 Resolve 只读取内存，Invoke 入队后立即 ACK；用户动作在独立执行进程中运行；native 仅上下文、限时 IPC 和 COM 菜单映射。
 
-```text
-.shellcommand.yaml
-GlobalCommands
-Functions
-Name
-Command
-Match
-RunAsAdmin
-Icon
-<&&>
-!
-*
-?
----
-%DIR%
-```
-
-但只兼容文档化意图，不复制旧实现中的不一致和偶然行为。
-
-## Explicit V11 Changes
-
-- Match false 始终隐藏 item；
-- `%DIR%` 是标准 Windows absolute path；
-- YAML parser failure 不传播；
-- command line 不再用 naive split；
-- input 有明确上限；
-- unsupported YAML features 被拒绝。
-
-## Reason
-
-完全重做配置会让一个本来很小的工具失去延续性；完全复制旧 bug 又会把历史实现绑进新架构。
-
-## Rejected
-
-### Introduce a brand-new lowercase V11 schema immediately
-
-没有足够产品收益，却增加迁移成本。
-
-### Promise bit-for-bit legacy behavior
-
-旧代码的 UI/解析行为本身不一致，不能作为稳定 contract。
+用户已要求继续完成整体编码。实机检查是发布验收门槛，不阻塞后续开发。当前实现进度和实机检查见 `docs/p0-validation.md`；历史实现不构成兼容承诺。

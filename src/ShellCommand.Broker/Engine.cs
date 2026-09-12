@@ -1,60 +1,59 @@
+using System.Threading.Channels;
 using ShellCommand.Core;
-
 namespace ShellCommand.Broker;
 
 public enum ResolveStatus : byte { Ok, NoCommands, InvalidRequest, Busy, InternalError, UnsupportedVersion }
-
-public sealed record MenuDto(byte Kind, string Title, string IconRef, Guid Token);
+public sealed record MenuDto(byte Kind, string Title, string IconRef, Guid Token, IReadOnlyList<MenuDto>? Items = null);
 public sealed record ResolveResult(ResolveStatus Status, IReadOnlyList<MenuDto> Items, IReadOnlyList<Diagnostic> Diagnostics);
-
-public sealed class BrokerEngine
+public interface IBrokerEndpoint
 {
-    private readonly FileConfigRuntime _runtime;
+    ResolveResult Resolve(MenuContext context);
+    Task<TokenStatus> InvokeAsync(Guid token, CancellationToken cancellationToken = default);
+    void Refresh(string? directory);
+}
+public sealed class BrokerEngine : IBrokerEndpoint, IDisposable
+{
+    private readonly SnapshotRuntime _runtime;
     private readonly ActionTokenStore _tokens;
     private readonly IActionExecutor _executor;
-    private readonly BuiltInCapabilities _capabilities;
-
-    public BrokerEngine(FileConfigRuntime runtime, ActionTokenStore tokens, IActionExecutor executor, BuiltInCapabilities? capabilities = null)
+    private readonly Channel<LaunchPlan> _actions = Channel.CreateBounded<LaunchPlan>(32);
+    private readonly CancellationTokenSource _stop = new();
+    public BrokerEngine(SnapshotRuntime runtime, ActionTokenStore tokens, IActionExecutor executor)
     {
-        _runtime = runtime;
-        _tokens = tokens;
-        _executor = executor;
-        _capabilities = capabilities ?? new BuiltInCapabilities(false, false);
+        _runtime = runtime; _tokens = tokens; _executor = executor;
+        _ = Task.Run(ExecuteQueueAsync);
     }
-
-    public ResolveResult Resolve(string? workingDirectory)
+    public ResolveResult Resolve(MenuContext context)
     {
-        if (string.IsNullOrWhiteSpace(workingDirectory) || !Path.IsPathFullyQualified(workingDirectory))
-            return new(ResolveStatus.InvalidRequest, Array.Empty<MenuDto>(), Array.Empty<Diagnostic>());
+        if (context.Selection.Count > 256 || context.Directory is not null && !Path.IsPathFullyQualified(context.Directory)
+            || context.Selection.Any(i => !Path.IsPathFullyQualified(i.Path))) return new(ResolveStatus.InvalidRequest, [], []);
+        var resolved = _runtime.Resolve(context);
+        MenuDto Map(ResolvedItem item) => item.Kind switch
+        {
+            "separator" => new(1, "", "", Guid.Empty),
+            "group" => new(2, item.Title, item.IconRef, Guid.Empty, item.Items!.Select(Map).ToArray()),
+            _ => new(0, item.Title, item.IconRef, _tokens.Issue(item.Plan!))
+        };
+        return new(ResolveStatus.Ok, resolved.Items.Select(Map).ToArray(), resolved.Diagnostics);
+    }
+    public Task<TokenStatus> InvokeAsync(Guid token, CancellationToken cancellationToken = default)
+    {
+        // A token is consumed at most once. Lost ACKs cannot execute it twice.
+        if (!_tokens.TryConsume(token, out var plan, out var status)) return Task.FromResult(status);
+        return Task.FromResult(_actions.Writer.TryWrite(plan!) ? TokenStatus.Accepted : TokenStatus.Busy);
+    }
+    public void Refresh(string? directory) => _runtime.Refresh(directory);
+    private async Task ExecuteQueueAsync()
+    {
         try
         {
-            var directory = Path.GetFullPath(workingDirectory);
-            if (!Directory.Exists(directory)) return new(ResolveStatus.InvalidRequest, Array.Empty<MenuDto>(), Array.Empty<Diagnostic>());
-            var snapshot = _runtime.Load(directory);
-            var menu = MenuResolver.Resolve(snapshot.Global, snapshot.Directory, new FileSystemDirectoryFacts(directory), directory, _capabilities);
-            var dtos = new List<MenuDto>(menu.Items.Count);
-            foreach (var item in menu.Items.Take(100))
+            await foreach (var plan in _actions.Reader.ReadAllAsync(_stop.Token).ConfigureAwait(false))
             {
-                if (item is ResolvedItem.Separator) dtos.Add(new(1, string.Empty, string.Empty, Guid.Empty));
-                else if (item is ResolvedItem.Action action) dtos.Add(new(0, action.Title, action.IconRef ?? string.Empty, _tokens.Issue(action.Spec)));
+                try { await _executor.ExecuteAsync(plan, _stop.Token).ConfigureAwait(false); }
+                catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or OperationCanceledException or System.ComponentModel.Win32Exception) { }
             }
-            return new(dtos.Count == 0 ? ResolveStatus.NoCommands : ResolveStatus.Ok, dtos, snapshot.Diagnostics);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
-        {
-            return new(ResolveStatus.InternalError, Array.Empty<MenuDto>(), new[] { new Diagnostic(string.Empty, DiagnosticSeverity.Error, "RESOLVE_FAILED", ex.Message) });
-        }
+        catch (OperationCanceledException) { }
     }
-
-    public async Task<TokenStatus> InvokeAsync(Guid token, CancellationToken cancellationToken = default)
-    {
-        if (!_tokens.TryConsume(token, out var spec, out var status)) return status;
-        try
-        {
-            await _executor.ExecuteAsync(spec!, cancellationToken).ConfigureAwait(false);
-            return TokenStatus.Accepted;
-        }
-        catch (OperationCanceledException) { return TokenStatus.InternalError; }
-        catch (Exception) { return TokenStatus.InternalError; }
-    }
+    public void Dispose() { _stop.Cancel(); _actions.Writer.TryComplete(); _runtime.Dispose(); }
 }

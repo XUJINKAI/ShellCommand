@@ -28,7 +28,7 @@ ShellCommand 的价值是：
 
 ## Packaged IExplorerCommand
 
-如果能得到 CLSID，可以对 `Shell Extensions\Blocked` 做 per-user best-effort block；这不等同于改 package registration。
+现代打包菜单只读展示，不根据发现的 CLSID 推断可修改性。仅传统 COM 扩展允许记录原值后修改当前用户 Blocked。
 
 UI 必须把这种能力标记为可逆 blocking，不声称卸载/删除 extension。
 

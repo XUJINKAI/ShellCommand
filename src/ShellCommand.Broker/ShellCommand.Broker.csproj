@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <OutputType>WinExe</OutputType>
     <AssemblyName>ShellCommand.Broker</AssemblyName>
     <RootNamespace>ShellCommand.Broker</RootNamespace>
   </PropertyGroup>

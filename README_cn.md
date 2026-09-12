@@ -1,113 +1,79 @@
-# ShellCommand 11
+# ShellCommand
 
-[English](README.md)
+用 YAML 为 Windows 11 右键菜单添加常用操作。支持目录背景、文件、文件夹、多选及两层自定义分组。
 
-ShellCommand 11 是一个面向 Windows 11 的右键菜单工具。它读取当前目录中的 `.shellcommand.yaml`，结合当前用户的全局配置，将符合条件的命令显示在 Windows 11 现代右键菜单的 `Directory\Background` 入口中。
+## 安装与运行
 
-## 项目结构
+依赖 **Windows 11 x64 和 .NET 10 Desktop Runtime x64**。发布使用 `PublishSingleFile=true`、`SelfContained=false`，不会捆绑 .NET 运行时；ZIP 中还包含原生扩展和身份资源。
 
-- `ShellCommand.Core`：跨平台核心模型、Match 规则、变量展开和菜单解析。
-- `ShellCommand.Config.Yaml`：受限 YAML 适配器、字段校验和结构化诊断。
-- `ShellCommand.Broker`：每用户 Broker、Named Pipe、配置缓存、Last Known Good、action token、命令执行和右键菜单管理。
-- `ShellCommand.App`：WPF 用户入口、状态检测和安装管理界面，发布后的程序名为 `ShellCommand.exe`。
-- `ShellCommand.Explorer`：原生 C++ `IExplorerCommand` 扩展，仅负责 Explorer 边界适配和限时 IPC。
-- `packaging`：Sparse Package manifest，以及开发构建、测试和绿色 ZIP 打包入口。
+解压完整 ZIP，运行 `ShellCommand.exe`，在「设置与任务」中启用。整套程序复制到 `%LOCALAPPDATA%\ShellCommand11\runner\<build-id>`；安装完成并关闭下载目录中的程序后，可删除下载副本。
 
-## 面向用户的使用方式
+安装只需界面操作，不要求签名、证书或命令行。点击「启用 / 修复」直接注册菜单；检测到旧版时可在界面确认替换。若 Windows 拒绝免签名注册，界面会显示完整错误，并在开发部署策略拒绝时提供 Windows 设置入口；开启开发者模式后返回重试。程序不自动修改系统策略。
 
-发布包是一个绿色 ZIP。解压后直接运行根目录中的：
+## 配置
 
-```text
-ShellCommand.exe
-```
+只支持 `version: 2`，不识别或迁移旧配置。
 
-程序会自动检测安装状态，并提供“安装 / 修复”“卸载”和“重启 Explorer”按钮。普通用户不需要运行 PowerShell、编辑注册表或执行其他安装命令。安装和卸载默认保留用户配置。
-
-安装完成后，在任意目录的空白处右键即可看到 `ShellCommand` 菜单。V11.0 只支持目录空白处右键，不处理选中的文件或文件夹。
-
-## 开发者构建与测试
-
-```powershell
-call packaging\scripts\Build.cmd Release
-call packaging\scripts\Test.cmd Release
-```
-
-项目使用 .NET 10。YAML 解析只存在于 `ShellCommand.Config.Yaml`，Core 不依赖 YamlDotNet、WPF、COM、Registry 或 Windows UI。
-
-## 生成绿色 ZIP
-
-在具备 Windows SDK 和 MSVC C++ 工具链的 Visual Studio 开发环境中运行：
-
-```powershell
-call .\packaging\scripts\Package.cmd Release
-```
-
-输出文件：
-
-```text
-artifacts\ShellCommand-11.0.0-win-x64.zip
-```
-
-该 ZIP 包含自包含的 `ShellCommand.exe`、Broker、Explorer 扩展和 sparse package manifest，可复制到其他 Windows 11 x64 电脑后直接运行。
-
-解压 ZIP 后，运行 ZIP 根目录中的 `ShellCommand.exe`，点击应用内的“安装 / 修复”完成安装；卸载和重启 Explorer 也在应用内完成。`artifacts\Release` 是开发构建目录，不是 ZIP 的替代品。
-
-如果右键菜单扩展导致 Explorer 反复重启，先关闭 ShellCommand 窗口，双击 ZIP 根目录中的 `Uninstall.cmd` 紧急注销集成；脚本会移除 package、自启动和 Broker，然后重启 Explorer。
-
-## 配置示例
-
-目录配置文件名固定为 `.shellcommand.yaml`：
+- 全局：`%LOCALAPPDATA%\ShellCommand11\config\global.shellcommand.yaml`
+- 当前目录：`.shellcommand.yaml`，不向父目录搜索
+- 本地与全局同 ID 时，本地完整替换全局；`enabled: false` 可屏蔽全局项
+- `include` 按包含文件的目录解析，最多 8 文件/合计 1 MiB
 
 ```yaml
-- Name: Open Terminal
-  Command: wt.exe -d "%DIR%"
+version: 2
+menu:
+  - id: terminal
+    title: 在此打开终端
+    icon: terminal
+    run:
+      exe: wt.exe
+      args: ['-d', '${directory}']
 
-- Name: Git Status
-  Command: git status
-  Match: .git
+  - id: git-status
+    title: 查看 Git 状态
+    when: {exists: .git}
+    run:
+      exe: git.exe
+      args: [status]
+      output: window
 
-- Name: Create README.md
-  Command: cmd.exe /c copy nul README.md
-  Match: ".git<&&>!README.md"
+  - id: copy-selected
+    title: 复制所选路径
+    when: {context: selection}
+    copy:
+      values: '${selection.paths}'
+      separator: "\r\n"
 ```
 
-全局配置位于：
+菜单页可编辑、保存并预览背景或选择项菜单。选择预览中的动作可查看实际程序、参数和工作目录；预览不执行命令。外部修改冲突不会被直接覆盖。错误配置保留上次有效菜单，并显示来源和原因。
+
+条件支持 `all`、`any`、`not`、`exists`、`context` 和 `selection`。不存在/尚未准备好的目录事实不会误判为满足条件。第一次访问目录时可能只显示全局操作及设置，稍后重新打开即可显示准备完成的菜单。
+
+动作支持 `run`、`script`、`open`、`copy`、`items`。`run.args` 必须是数组；不会自动套一层 cmd。`mode: each` 为每个选择项生成独立执行计划。跨目录选择没有默认 cwd，可显式使用 `${item.parent}`。
+
+变量：`${directory}`、`${config_dir}`、`${app_dir}`、`${data_dir}`、`${env:NAME}`、`${selection.paths}`、`${item.path}`、`${item.parent}`。列表变量只能独占 args 元素或用于 copy.values。变量只展开一次，`$${` 表示字面量 `${`。
+
+脚本使用显式 `powershell` / `pwsh` / `cmd`，脚本文本不展开上述变量，改读 `SC_DIRECTORY`、`SC_CONFIG_DIR`、`SC_SELECTION_JSON` 环境变量。管理员运行仅限 `run` 的 normal 输出，不支持同时自定义 env。
+
+`output: window` 显示任务输出，输出长度有界；关闭窗口后任务继续，点击「停止」结束该任务进程树。普通 GUI 程序只记录成功启动，不宣称监控完整生命周期。
+
+## 故障恢复
 
 ```text
-%LOCALAPPDATA%\ShellCommand11\config\global.shellcommand.yaml
+ShellCommand.exe --uninstall
+ShellCommand.exe --disable-integration
+ShellCommand.exe --check-installation
 ```
 
-例如：
+卸载不依赖配置解析，保留 config 和系统菜单恢复记录。缺少 .NET 或 runner 损坏时可使用 ZIP 中的 `Uninstall.cmd`。不自动终止其他会话的进程或重启 Explorer。
 
-```yaml
-GlobalCommands:
-  - Name: Open Terminal
-    Command: wt.exe -d "%DIR%"
+系统菜单页独立扫描当前用户及机器级注册、现代打包菜单。只对支持的当前用户机制开放修改；现代菜单只读。损坏恢复日志会阻止修改；恢复前检查外部修改。COM 阻止可能同时影响该 CLSID 的多个菜单位置。
 
-Functions:
-  CopyPath: true
-  EditGlobal: true
-```
+## 开发
 
-支持的主要字段包括：
+- `packaging/scripts/Build.cmd Release`：构建
+- `packaging/scripts/Test.cmd Release`：托管测试
+- `packaging/scripts/Package.cmd Release`：少文件 ZIP
+- `packaging/scripts/Smoke-Install.ps1`：干净 Win11 的安装、删除来源、卸载检查
 
-- `Name`：菜单显示名称；缺失时使用 `Command`。
-- `Command`：Windows command line。ShellCommand 不会自动添加 `cmd.exe /c`。
-- `Match`：当前目录直接子项的存在性条件，支持 `<&&>`、`!`、`*` 和 `?`。
-- `RunAsAdmin`：是否通过 UAC 以管理员身份启动。
-- `Icon`：EXE 或 DLL 图标路径，可使用 `?index` 指定资源索引。
-- `Name: ---`：菜单分隔线。
-
-`%DIR%` 会展开为当前工作目录的完整 Windows 路径。普通环境变量也支持展开，例如 `%LOCALAPPDATA%` 和 `%PROGRAMFILES%`。
-
-## 稳定性与安全边界
-
-- Explorer 扩展不解析 YAML、不加载 CLR、不执行用户命令、不访问网络。
-- Explorer 菜单路径使用有上限的 Named Pipe 请求和硬超时。
-- Broker 不可用、配置错误或 IPC 响应损坏时，菜单退化为 `Open ShellCommand 11`，不会弹出错误对话框。
-- Match 不执行脚本、不访问网络、不递归扫描目录。
-- action token 绑定不可变执行计划，默认有效期为两分钟，成功接收后不可重复使用。
-- 第三方右键菜单管理只使用可逆策略，并记录修改前的注册表状态。
-- 不修改 AppX/PackagedCom 内部数据库，也不提供 Windows 11 一级菜单任意排序功能。
-
-详细行为以 `docs/contracts`、`docs/features` 和 `docs/workflows` 中的文档为准。
+架构和完整语法见 [设计文档](docs/redesign-v2.md)。Windows CI 包含原生命名管道故障注入、ASan、1 万次请求回收检查；这些检查不能替代真实 Explorer 的发布验收。
