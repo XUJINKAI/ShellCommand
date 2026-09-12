@@ -8,6 +8,6 @@ Installed files live under `%LOCALAPPDATA%\ShellCommand11\runner\<build-id>`. Gl
 
 The management window includes a menu editor/preview, task results and reversible current-user context menu controls. Explorer never parses YAML or executes user commands. The broker resolves immutable snapshots and acknowledges queued actions before launching an executor.
 
-Production installation requires a trusted signed identity package. Unsigned development artifacts require explicit `--developer-install`; developer mode and certificate trust are never changed automatically. Clean Windows 11 and real Explorer/Surrogate checks remain release acceptance requirements.
+Extract the complete ZIP, open ShellCommand.exe and click Enable / Repair. Installation registers the manifest directly, without a signing certificate or command-line steps. The UI offers replacement of old integration and displays installation errors. If Windows rejects development deployment, it provides a Settings shortcut; enable Developer Mode there and retry. System policy is never changed automatically. Real Windows 11 Explorer testing remains necessary.
 
 See the [Chinese usage guide](README_cn.md), [design](docs/redesign-v2.md) and [validation notes](docs/p0-validation.md).

@@ -8,7 +8,7 @@
 
 解压完整 ZIP，运行 `ShellCommand.exe`，在「设置与任务」中启用。整套程序复制到 `%LOCALAPPDATA%\ShellCommand11\runner\<build-id>`；安装完成并关闭下载目录中的程序后，可删除下载副本。
 
-正式启用需要受信任签名身份包。未签名开发包可显式使用 `ShellCommand.exe --developer-install` 在开发机器测试，不会自动更改 Windows 开发者模式或安装证书。真实 Explorer/Surrogate、干净 Win11 签名安装仍需发布前验收。
+安装只需界面操作，不要求签名、证书或命令行。点击「启用 / 修复」直接注册菜单；检测到旧版时可在界面确认替换。若 Windows 拒绝免签名注册，界面会显示完整错误，并在开发部署策略拒绝时提供 Windows 设置入口；开启开发者模式后返回重试。程序不自动修改系统策略。
 
 ## 配置
 
@@ -74,7 +74,6 @@ ShellCommand.exe --check-installation
 - `packaging/scripts/Build.cmd Release`：构建
 - `packaging/scripts/Test.cmd Release`：托管测试
 - `packaging/scripts/Package.cmd Release`：少文件 ZIP
-- `packaging/scripts/Sign-Identity.ps1`：生成并签名身份包
 - `packaging/scripts/Smoke-Install.ps1`：干净 Win11 的安装、删除来源、卸载检查
 
 架构和完整语法见 [设计文档](docs/redesign-v2.md)。Windows CI 包含原生命名管道故障注入、ASan、1 万次请求回收检查；这些检查不能替代真实 Explorer 的发布验收。

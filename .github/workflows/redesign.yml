@@ -64,6 +64,22 @@ jobs:
         run: |
           ./packaging/scripts/Stage-Package.ps1 -Directory artifacts/package
           ./packaging/scripts/Create-Zip.ps1 -SourceDirectory artifacts/package -Destination artifacts/ShellCommand-v2-win-x64.zip
+      - name: Unsigned install, source removal and uninstall
+        timeout-minutes: 4
+        shell: pwsh
+        run: |
+          # Provision only this disposable CI machine; the product never changes this policy.
+          $key = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock'
+          $name = 'AllowDevelopmentWithoutDevLicense'
+          New-Item $key -Force | Out-Null
+          $previous = Get-ItemPropertyValue $key $name -ErrorAction SilentlyContinue
+          try {
+            New-ItemProperty $key -Name $name -Value 1 -PropertyType DWord -Force | Out-Null
+            ./packaging/scripts/Smoke-Install.ps1 -PackageDirectory artifacts/package
+          } finally {
+            if ($null -eq $previous) { Remove-ItemProperty $key $name -ErrorAction SilentlyContinue }
+            else { Set-ItemProperty $key $name $previous }
+          }
       - uses: actions/upload-artifact@v4
         if: always()
         with:

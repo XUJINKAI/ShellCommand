@@ -27,9 +27,9 @@ public sealed record InstallationStatus(
     public bool IsInstalled => State == IntegrationState.Installed;
 }
 
-public sealed record InstallationOperationResult(bool Success, string Message, InstallationStatus Status);
+public sealed record InstallationOperationResult(bool Success, string Message, InstallationStatus Status, bool RequiresLegacyRemoval = false, bool RequiresDeveloperSettings = false);
 
-public sealed record InstalledBuild(string Root, bool DeveloperRegistration);
+public sealed record InstalledBuild(string Root);
 
 public sealed class InstallationManager
 {
@@ -77,12 +77,12 @@ public sealed class InstallationManager
         var autoStart = string.Equals(ReadAutoStart(), Quote(Path.Combine(root, "ShellCommand.Broker.exe")), StringComparison.OrdinalIgnoreCase);
         var state = !registered ? IntegrationState.NotInstalled : !files ? IntegrationState.PackageFilesMissing : record is not null && correctLocation && broker && autoStart ? IntegrationState.Installed : IntegrationState.NeedsRepair;
         var message = state == IntegrationState.Installed
-            ? (record!.DeveloperRegistration ? "开发注册已启用；尚未通过正式签名安装验证。" : "已安装，后台协议与 runner 路径检查通过。")
+            ? "已启用右键菜单，程序与后台运行正常。"
             : registered ? "集成需要修复，请检查 runner、注册与后台。" : "尚未启用右键菜单集成。";
         return new(state, registered, files, autoStart, broker, message);
     }
 
-    public async Task<InstallationOperationResult> InstallOrRepairAsync(bool developerRegistration = false, CancellationToken cancellationToken = default)
+    public async Task<InstallationOperationResult> InstallOrRepairAsync(CancellationToken cancellationToken = default)
     {
         InstalledBuild? previous = null;
         string? previousAutoStart = null;
@@ -98,12 +98,11 @@ public sealed class InstallationManager
             {
                 var existing = await RunPowerShellAsync("$ErrorActionPreference='Stop'; (Get-AppxPackage -Name 'ShellCommand11').PackageFullName", cancellationToken).ConfigureAwait(false);
                 if (!existing.Success) throw new InvalidOperationException(existing.ErrorOrOutput);
-                if (!string.IsNullOrWhiteSpace(existing.Output)) throw new InvalidOperationException("发现没有本分支安装记录的注册。请先卸载集成，再启用新构建；配置不会迁移或删除。");
+                if (!string.IsNullOrWhiteSpace(existing.Output))
+                    return new(false, "检测到旧版菜单集成。是否替换安装？配置文件会保留，旧配置不会自动转换。", new(IntegrationState.NeedsRepair, true, false, false, false, "检测到旧版集成"), RequiresLegacyRemoval: true);
             }
             var target = await Task.Run(() => DeploymentPackage.Stage(_sourceRoot, DeploymentPackage.DataRoot), cancellationToken).ConfigureAwait(false);
-            var next = new InstalledBuild(target, developerRegistration);
-            if (!developerRegistration && !File.Exists(Path.Combine(target, "ShellCommand.Identity.msix")))
-                throw new InvalidOperationException("本开发构建未附带签名身份包，不能正式启用。开发测试请使用 --developer-install；不会自动打开 Windows 开发者模式。");
+            var next = new InstalledBuild(target);
             foreach (var folder in new[] { "config", "state", "cache", "logs", "temp" }) Directory.CreateDirectory(Path.Combine(DeploymentPackage.DataRoot, folder));
             if (!File.Exists(GlobalConfigPath)) File.WriteAllText(GlobalConfigPath, DefaultConfiguration.Text, new UTF8Encoding(false));
             StopInstalledBroker();
@@ -117,7 +116,7 @@ public sealed class InstallationManager
             if (!status.IsInstalled) throw new InvalidOperationException("安装后健康检查失败。");
             return new(true, status.Message + " 程序已复制到 " + target, status);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or Win32Exception or System.Text.Json.JsonException or OperationCanceledException)
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException or Win32Exception or System.Text.Json.JsonException or OperationCanceledException)
         {
             var message = "安装失败：" + ex.Message;
             if (registrationAttempted)
@@ -140,18 +139,17 @@ public sealed class InstallationManager
                     }
                     message += " 已恢复先前安装状态。";
                 }
-                catch (Exception rollback) { message += " 恢复失败：" + rollback.Message + "；可运行 --disable-integration 注销。"; }
+                catch (Exception rollback) { message += " 恢复失败：" + rollback.Message + "；可在设置页点击「卸载」注销。"; }
             }
-            return new(false, message, new(IntegrationState.NeedsRepair, false, false, false, false, message));
+            return new(false, message, new(IntegrationState.NeedsRepair, false, false, false, false, message), RequiresDeveloperSettings: message.Contains("0x80073CFF", StringComparison.OrdinalIgnoreCase));
         }
         finally { operationLock?.Dispose(); }
     }
 
     private static async Task RegisterAsync(InstalledBuild build, CancellationToken cancellationToken)
     {
-        var path = Path.Combine(build.Root, build.DeveloperRegistration ? "AppxManifest.xml" : "ShellCommand.Identity.msix");
-        var mode = build.DeveloperRegistration ? "-Register" : "-Path";
-        var result = await RunPowerShellAsync($"$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; Add-AppxPackage {mode} {PowerShellLiteral(path)} -ExternalLocation {PowerShellLiteral(build.Root)}", cancellationToken).ConfigureAwait(false);
+        var path = Path.Combine(build.Root, "AppxManifest.xml");
+        var result = await RunPowerShellAsync($"$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; Add-AppxPackage -Register {PowerShellLiteral(path)} -ExternalLocation {PowerShellLiteral(build.Root)}", cancellationToken).ConfigureAwait(false);
         if (!result.Success) throw new InvalidOperationException("Windows 集成注册失败：" + result.ErrorOrOutput);
         // Verify the actual registered external location, not just a package name.
         var verify = await RunPowerShellAsync("$ErrorActionPreference='Stop'; (Get-AppxPackage -Name 'ShellCommand11').PackageFullName", cancellationToken).ConfigureAwait(false);
@@ -198,7 +196,7 @@ public sealed class InstallationManager
             }
             return new(true, "已注销集成和自启动，保留配置及菜单恢复记录。占用中的程序文件将在关闭相关进程后才能删除。", new(IntegrationState.NotInstalled, false, false, false, false, "已注销"));
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or Win32Exception)
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException or Win32Exception)
         {
             return new(false, "卸载失败：" + ex.Message, new(IntegrationState.NeedsRepair, false, false, false, false, ex.Message));
         }

@@ -18,7 +18,7 @@ public static class EntryPoint
         }
         if (args.Contains("--install", StringComparer.Ordinal) || args.Contains("--developer-install", StringComparer.Ordinal))
         {
-            var result = new InstallationManager().InstallOrRepairAsync(developerRegistration: args.Contains("--developer-install", StringComparer.Ordinal)).GetAwaiter().GetResult();
+            var result = new InstallationManager().InstallOrRepairAsync().GetAwaiter().GetResult();
             Console.WriteLine(result.Message);
             return result.Success ? 0 : 1;
         }

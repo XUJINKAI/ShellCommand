@@ -151,8 +151,27 @@ public partial class MainWindow : Window
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await RunUi(RefreshStatus);
     private async void Install_Click(object sender, RoutedEventArgs e) => await RunUi(async () =>
     {
-        var result = await _installation.InstallOrRepairAsync(); Notice.Text = result.Message;
-        MessageBox.Show(this, result.Message, "ShellCommand"); await RefreshStatus();
+        var result = await _installation.InstallOrRepairAsync();
+        if (result.RequiresLegacyRemoval)
+        {
+            if (MessageBox.Show(this, result.Message, "替换旧版", MessageBoxButton.YesNo) != MessageBoxResult.Yes) { Notice.Text = "已取消安装。"; return; }
+            var removal = await InstallationManager.UninstallAsync();
+            result = removal.Success ? await _installation.InstallOrRepairAsync() : removal;
+        }
+        try { await RefreshStatus(); }
+        catch (Exception ex) { StatusTitle.Text = "状态读取失败"; StatusMessage.Text = ex.Message; }
+        Notice.Text = result.Message;
+        if (!result.Success) StatusMessage.Text = result.Message;
+        DeveloperSettingsButton.Visibility = result.RequiresDeveloperSettings ? Visibility.Visible : Visibility.Collapsed;
+        var message = result.RequiresDeveloperSettings
+            ? "Windows 尚未允许免签名注册。点击「打开 Windows 设置」，开启开发者模式后返回重试。\n\n" + result.Message
+            : result.Message;
+        MessageBox.Show(this, message, result.Success ? "已启用" : "安装未完成", MessageBoxButton.OK, result.Success ? MessageBoxImage.Information : MessageBoxImage.Error);
+    });
+    private async void DeveloperSettings_Click(object sender, RoutedEventArgs e) => await RunUi(() =>
+    {
+        Process.Start(new ProcessStartInfo("ms-settings:developers") { UseShellExecute = true })?.Dispose();
+        return Task.CompletedTask;
     });
     private async void Uninstall_Click(object sender, RoutedEventArgs e) => await RunUi(async () =>
     {

@@ -1,7 +1,11 @@
-# ShellCommand v2 — installation
+# 安装契约（2026-09-12 用户修订）
 
-本契约以[已确认的完整设计](../redesign-v2.md)为准。仅支持 `version: 2`，不保留旧字段、旧命令行语法或配置迁移。
+产品仅 ZIP 分发，不要求应用商店、签名证书或签名身份包。用户打开 ShellCommand.exe，在界面点击「启用 / 修复」即可发起安装。唯一注册路径是 Add-AppxPackage -Register AppxManifest.xml -ExternalLocation runner；内部调用系统工具不等于要求用户使用命令行。
 
-安装根固定为 `%LOCALAPPDATA%\ShellCommand11`，config 与 runner 分离。Core 是不可变数据、条件、变量与执行计划；准备进程处理 YAML/目录/图标；Broker 的 Resolve 只读取内存，Invoke 入队后立即 ACK；用户动作在独立执行进程中运行；native 仅上下文、限时 IPC 和 COM 菜单映射。
+程序先完整复制到 %LOCALAPPDATA%/ShellCommand11/runner/<build-id>，再注册当前用户集成、自启动和后台；健康检查通过才显示已启用。配置位于 config，卸载保留配置和菜单恢复记录。
 
-用户已要求继续完成整体编码。实机检查是发布验收门槛，不阻塞后续开发。当前实现进度和实机检查见 `docs/p0-validation.md`；历史实现不构成兼容承诺。
+如果存在没有新版安装记录的旧集成，界面提供确认替换，随后注销旧集成并安装；不要求用户手工卸载或执行命令。配置不迁移。
+
+Windows 拒绝注册时，界面保留完整错误；开发部署策略拒绝时提供 Windows 设置入口。不擅自修改开发者模式、系统策略或证书信任。此系统前提不能用忽略错误假装安装成功。
+
+本修订取代旧设计中「默认签名包安装、未签名仅开发测试」要求。真实 Windows 11 Explorer/安装验收仍需执行；CI 编译通过不代表实机安装通过。
