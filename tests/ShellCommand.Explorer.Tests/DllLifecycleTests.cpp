@@ -21,10 +21,26 @@ template<class T> struct Com {
     ~Com() { if (p) p->Release(); }
     T* operator->() const { return p; }
 };
+void CheckIcon(IExplorerCommand* command, IShellItemArray* items) {
+    LPWSTR icon = nullptr;
+    const auto hr = command->GetIcon(items, &icon);
+    // The observed Windows.UI.FileExplorer caller tests FAILED(hr), then reads
+    // the returned UTF-16 string. Do not hide success-with-null behind `if(icon)`.
+    if (SUCCEEDED(hr)) {
+        Check(icon != nullptr, "successful GetIcon returned null");
+        Check(hr == S_OK && icon[0] != L'\0', "invalid successful icon result");
+        const std::wstring copied(icon);
+        Check(!copied.empty(), "icon copy failed");
+    } else {
+        Check(hr == E_NOTIMPL && icon == nullptr, "missing icon must fail with an empty output");
+    }
+    CoTaskMemFree(icon);
+}
 void Exercise(IExplorerCommand* command, IShellItemArray* items) {
     Com<IObjectWithSite> site;
     Succeeded(command->QueryInterface(IID_PPV_ARGS(&site.p)), "IObjectWithSite");
     Succeeded(site->SetSite(nullptr), "clear site");
+    CheckIcon(command, items);
     EXPCMDSTATE state{};
     const auto quick = command->GetState(items, FALSE, &state);
     Check(quick == E_PENDING || quick == S_OK, "fast GetState");
@@ -48,6 +64,7 @@ void Exercise(IExplorerCommand* command, IShellItemArray* items) {
         Succeeded(child->GetTitle(items, &title), "child title");
         Check(title != nullptr, "null title");
         CoTaskMemFree(title);
+        CheckIcon(child.p, items);
         GUID name{};
         Succeeded(child->GetCanonicalName(&name), "canonical name");
         Check(name != kClass, "child aliases root canonical name");

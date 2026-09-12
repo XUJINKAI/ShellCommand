@@ -97,6 +97,31 @@ void NestedMenus() {
 }
 
 
+void OptionalIconContract() {
+    ExplorerCommand root(true);
+    LPWSTR icon = nullptr;
+    Check(root.GetIcon(nullptr, &icon) == S_OK && icon && icon[0], "root icon missing");
+    CoTaskMemFree(icon);
+    for (int kind = 0; kind < 4; ++kind) {
+        ChildData data;
+        data.title = L"Without icon";
+        if (kind == 1) data.isFallback = true;
+        if (kind == 2) data.isSeparator = true;
+        if (kind == 3) data.children.push_back(ChildData{});
+        ExplorerCommand command(std::move(data));
+        icon = reinterpret_cast<LPWSTR>(1);
+        const auto hr = command.GetIcon(nullptr, &icon);
+        Check(FAILED(hr) && hr == E_NOTIMPL && !icon, "iconless command reported success with null");
+        Check(command.GetIcon(nullptr, nullptr) == E_POINTER, "null icon output accepted");
+    }
+    ChildData data;
+    data.icon = L"C:\\Icons\\test.ico";
+    ExplorerCommand command(data);
+    icon = nullptr;
+    Check(command.GetIcon(nullptr, &icon) == S_OK && icon && std::wstring(icon) == data.icon, "prepared icon lost");
+    CoTaskMemFree(icon);
+}
+
 void EnumeratorFailures() {
     CommandEnumerator enumerator({ChildData{}, ChildData{}});
     IExplorerCommand* output[3]{};
@@ -198,6 +223,7 @@ void InvalidOutgoingStrings() {
 
 int main() {
     try {
+        OptionalIconContract();
         EnumeratorFailures();
         ReentrantContext();
         ConcurrentComLifetime();

@@ -13,6 +13,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -67,6 +69,27 @@ jobs:
           /DUNICODE /D_UNICODE /DNOMINMAX tests\ShellCommand.Explorer.Tests\DllLifecycleTests.cpp
           /Fe:DllLifecycleTests.exe /link shlwapi.lib ole32.lib shell32.lib uuid.lib
           && DllLifecycleTests.exe "%CD%\artifacts\package\ShellCommand.Explorer.dll"
+      - name: Prove icon regression rejects the previous DLL
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          $baseline = Join-Path $env:RUNNER_TEMP 'ShellCommand-icon-baseline'
+          New-Item $baseline -ItemType Directory -Force | Out-Null
+          $source = Join-Path $baseline 'BeforeFix.cpp'
+          $dll = Join-Path $baseline 'ShellCommand.Explorer.dll'
+          git show daa66846e385d755a7fc1d15f329e71834c2b967:src/ShellCommand.Explorer/ShellCommandExplorer.cpp | Set-Content $source -Encoding utf8
+          if ($LASTEXITCODE) { throw 'Could not read pre-fix source.' }
+          & cl /nologo /LD /std:c++20 /EHsc /W4 /WX /MT /utf-8 /DUNICODE /D_UNICODE /DNOMINMAX $source /link "/OUT:$dll" shlwapi.lib ole32.lib advapi32.lib shell32.lib uuid.lib
+          if ($LASTEXITCODE) { throw 'Pre-fix DLL build failed.' }
+          $output = & ./DllLifecycleTests.exe $dll 2>&1
+          $code = $LASTEXITCODE
+          $output | Set-Content artifacts/icon-regression-baseline.txt
+          if ($code -ne 1 -or ($output -join "`n") -notmatch 'successful GetIcon returned null') {
+            throw 'Regression did not reject the pre-fix DLL for the expected icon contract violation.'
+          }
+          Write-Host 'Previous DLL rejected: successful GetIcon returned null. Fixed DLL passed the same probe.'
+          # The preceding nonzero exit is the expected negative control.
+          exit 0
       - name: Prepare distribution and verify layout
         shell: pwsh
         run: |
@@ -95,4 +118,5 @@ jobs:
           name: ShellCommand-v2-win-x64
           path: |
             artifacts/*.zip
+            artifacts/icon-regression-baseline.txt
             tests/**/TestResults/*.trx

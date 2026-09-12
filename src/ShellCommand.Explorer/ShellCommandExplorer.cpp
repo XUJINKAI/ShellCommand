@@ -733,7 +733,9 @@ public:
             ? L"%SystemRoot%\\System32\\shell32.dll,-167"
             : data_.icon.c_str();
         if (*iconRef == L'\0') {
-            return S_FALSE;
+            // S_FALSE is still SUCCEEDED(hr). Explorer consumes the returned
+            // string on any successful HRESULT, so success + nullptr crashes it.
+            return E_NOTIMPL;
         }
         return CopyStringToTaskMemory(iconRef, icon);
     }

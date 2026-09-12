@@ -43,3 +43,21 @@
 [Windows CI 运行 34563502105](https://github.com/XUJINKAI/ShellCommand/actions/runs/34563502105) 已通过托管测试、原生故障注入、ASan、两入口无运行时单文件发布、native DLL 编译和 ZIP 校验。首次原生测试的 10000 次无 Broker 请求前后句柄数为 123 → 123。这不是 Explorer 中 10000 次实际菜单的测量，也没有据此宣称 p95/p99 达标。
 
 当前环境没有干净 Windows 11 桌面、发布签名证书或用户卡死现场转储。以上历史 CI 仅证明当时的 P0 代码；v2 完整实现的最新验证结果以本分支 PR 中链接的 CI 为准。未执行的人工项目保持未勾选，不据此停止开发。
+
+## 右键崩溃转储定位（2026-09-12）
+
+现场 Explorer 右键即崩溃；`Windows.UI.FileExplorer.dll` 版本 `10.0.26100.9278`，异常 `0xc0000005`，故障偏移 `0x26ff3`，异常记录为读取地址 `0`。
+
+在本地解析转储的异常流、模块表、内存与 x64 指令，得到以下直接调用关系（模块相对偏移，无私有符号名）：
+
+- `+0xc192b`：取接口虚表 `+0x20`，对应 `IExplorerCommand::GetIcon`。
+- `+0xc1945`：调用 GetIcon。
+- `+0xc194a` / `+0xc194c`：`test eax,eax` / `js`，只对失败 HRESULT 跳过字符串处理。
+- `+0xc194e`：读取 GetIcon 的字符串输出；`+0xc1956` 调用 UTF-16 字符串处理函数 `+0x26fc0`。
+- `+0x26ff3`：`cmp word ptr [rdx+rdi*2],0`，扫描字符串时触发空地址读取。该函数的栈返回地址为 `+0xc195b`，与上述调用一致；再上一层返回地址为 `+0xe7f70`。
+
+扩展的无图标分支返回 `S_FALSE` 并保留空输出，这正好穿过调用方的成功检查。改为 `E_NOTIMPL + nullptr`，有图标时仍返回 `S_OK + 有效字符串`。修复涵盖普通动作、分组、分隔及 Broker 不可用时的 fallback。
+
+之前的 DLL/Surrogate 测试调用了 GetTitle/GetState/GetFlags，却没有调用 GetIcon，因此没有发现这个具体契约错误。新增图标断言进入同一发布 DLL/Surrogate 测试，并用修复前提交 `daa66846e385d755a7fc1d15f329e71834c2b967` 编译 DLL 做负向对照：必须因 `successful GetIcon returned null` 被拒绝；修复版必须通过相同测试。该负向对照在解引用前报告错误，不故意制造 CI 进程访问冲突。
+
+不上传用户转储或进程内存到仓库。自动化结果以对应提交的 Windows CI 为准，用户桌面复测单独确认。
